@@ -62,7 +62,7 @@ class SimulateXr {
 
   bool before_render(mjvScene *scn, mjModel *m);
 
-  void after_render(mjrContext *con);
+  void after_render(mjrContext *con, int window_width, int window_height);
 
   bool is_initialized();
 
@@ -194,7 +194,7 @@ class SimulateXr {
   RenderLayerInfo renderLayerInfo;
   bool rendered = false;
 
-  void _blit_to_mujoco();
+  void _blit_to_mujoco(int dst_width, int dst_height);
 };
 
 #endif  // SIMULATE_XR_H_

@@ -2494,7 +2494,9 @@ void Simulate::Render() {
     // render in offscreen buffer
     mjr_setBuffer(mjFB_OFFSCREEN, &this->platform_ui->mjr_context());
     mjr_render(rectXR, &this->scn, &this->platform_ui->mjr_context());
-    simXr.after_render(&this->platform_ui->mjr_context());
+    simXr.after_render(&this->platform_ui->mjr_context(),
+                       this->uistate.rect[0].width,  // entire window
+                       this->uistate.rect[0].height);
     mjr_setBuffer(mjFB_WINDOW, &this->platform_ui->mjr_context());
   } else {
     mjr_render(rect, &this->scn, &this->platform_ui->mjr_context());

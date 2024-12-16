@@ -213,7 +213,8 @@ bool SimulateXr::before_render(mjvScene *scn, mjModel *m) {
 
 bool SimulateXr::is_initialized() { return m_initialized; }
 
-void SimulateXr::after_render(mjrContext *con) {
+void SimulateXr::after_render(mjrContext *con, int window_width,
+                              int window_height) {
   if (!m_sessionRunning) return;
 
   int answ;
@@ -234,7 +235,7 @@ void SimulateXr::after_render(mjrContext *con) {
   //// TODO: pull window size from the system
   // glBlitFramebuffer(0, 0, width_render, height, 0, 0, width / 2, height / 2,
   //                   GL_COLOR_BUFFER_BIT, GL_LINEAR);
-  _blit_to_mujoco();
+  _blit_to_mujoco(window_width, window_height);
 
   // here be other things
   //// EndRendering
@@ -906,15 +907,12 @@ int64_t SimulateXr::SelectColorSwapchainFormat(
   return *swapchainFormatIt;
 }
 
-void SimulateXr::_blit_to_mujoco() {
+void SimulateXr::_blit_to_mujoco(int dst_width, int dst_height) {
   // make the background black
   glClearColor(0, 0, 0, 1);
 
-  // get window size
+  // displacement within window
   int dst_x = 0, dst_y = 0;
-  int dst_width, dst_height;
-  GLFWwindow *window_ = glfwGetCurrentContext();
-  glfwGetWindowSize(window_, &dst_width, &dst_height);
 
   int src_width = width;
   int src_height = width;  // height / 2;
