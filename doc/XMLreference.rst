@@ -264,6 +264,11 @@ how to use includes and how to modularize large files if desired.
    The name of the XML file to be included. The file location is relative to the directory of the main MJCF file. If the
    file is not in the same directory, it should be prefixed with a relative path.
 
+.. admonition:: Prefer attach to include
+   :class: note
+
+   While some use cases for :ref:`include<include>` remain valid, it is recommended to use the
+   :ref:`attach<body-attach>` element instead, where applicable.
 
 
 .. _mujoco:
@@ -596,9 +601,17 @@ from its default.
 .. _option-flag-energy:
 
 :at:`energy`: :at-val:`[disable, enable], "disable"`
-   This flag enables the computation of kinetic and potential energy, stored in mjData.energy and displayed in the GUI.
-   This feature adds some CPU time but it is usually negligible. Monitoring energy for a system that is supposed to be
-   energy-conserving is one of the best ways to assess the accuracy of a complex simulation.
+   This flag enables the computation of potential and kinetic energy in ``mjData.energy[0, 1]`` respectively,
+   and displayed in the simulate GUI info overlay. Potential energy includes the gravitational component summed over
+   all bodies :math:`\sum_b m_b g h` and energy stored in passive springs in joints, tendons and flexes
+   :math:`\tfrac{1}{2} k x^2`, where :math:`x` is the displacement and and :math:`k` is the spring constant. Kinetic
+   energy is given by :math:`\tfrac{1}{2} v^T M v`, where :math:`v` is the velocity and :math:`M` is the
+   mass matrix. Note that potential and kinetic energy in constraints is not accounted for.
+
+   The extra computation (also triggered by :ref:`potential<sensor-e_potential>` and
+   :ref:`kinetic<sensor-e_kinetic>` energy sensors) adds some CPU time but it is usually negligible. Monitoring energy
+   for a system that is supposed to be energy-conserving is one of the best ways to assess the accuracy of a complex
+   simulation.
 
 .. _option-flag-fwdinv:
 
@@ -2354,7 +2367,8 @@ helps clarify the role of bodies and geoms in MuJoCo.
    This attribute specifies an integer group to which the geom belongs. The only effect on the physics is at compile
    time, when body masses and inertias are inferred from geoms selected based on their group; see inertiagrouprange
    attribute of :ref:`compiler <compiler>`. At runtime this attribute is used by the visualizer to enable and disable
-   the rendering of entire geom groups. It can also be used as a tag for custom computations.
+   the rendering of entire geom groups. By default, groups 0, 1 and 2 are visible, while all other groups are invisible.
+   The group attribute can also be used as a tag for custom computations.
 
 .. _body-geom-priority:
 
@@ -2981,20 +2995,6 @@ coordinates results in compiler error. See :ref:`CComposite` in the modeling gui
    define the tendons). The "main" tendons are parallel to the axes of the grid. In addition one can create diagonal
    "shear" tendons, using the :el:`tendon` sub-element. This type is suitable for simulating strings as well as cloth.
 
-   The **rope** type creates a 1D grid of bodies, each having a geom with user-defined type (sphere, capsule or
-   ellipsoid) and 2 hinge joints with axes orthogonal to the grid, creating a universal joint with the previous body.
-   This corresponds to a kinematic chain which can bend but cannot stretch or twist. In addition, one can specify
-   stretch and twist joints (slide and hinge respectively) with the :el:`joint` sub-element. When specified, these extra
-   joints are equality-constrained, but the constraint is soft by default so that some stretch and twist are possible.
-   The rope can extend in one or both directions from the parent body. To specify the origin of the rope, the parent
-   body *must* be named so that it fits the automatic naming convention. For example, to make the parent be the first
-   body in the chain, and assuming we have prefix="C", the parent body should be named "CB0". When the parent is not at
-   the end, the rope consists of two kinematic chains starting at the parent and extending in opposite directions.
-
-   The **loop** type is the same as the rope type except the elements are arranged in a circle, and the first and last
-   elements are equality-constrained to remain connected (using the "connect" constraint type). The softness of this
-   equality constraint is adjusted with the attributes solrefsmooth and solimpsmooth.
-
    The **cable** type creates a 1D chain of bodies connected with ball joints, each having a geom with user-defined type
    (cylinder, capsule or box). The geometry can either be defined with an array of 3D vertex coordinates :at:`vertex`
    or with prescribed functions with the option :at:`curve`. Currently, only linear and trigonometric functions are
@@ -3489,7 +3489,7 @@ saving the XML:
 
 .. _body-flexcomp-type:
 
-:at:`type`: :at-val:`[grid, box, cylinder, ellipsoid, mesh, gmsh, direct], "grid"`
+:at:`type`: :at-val:`[grid, box, cylinder, ellipsoid, disc, circle, mesh, gmsh, direct], "grid"`
    This attribute determines the type of :el:`flexcomp` object. The remaining attributes and sub-elements are then
    interpreted according to the type. Default settings are also adjusted depending on the type. Different types
    correspond to different methods for specifying the flexcomp points and the stretchable elements that connect them.
@@ -3512,6 +3512,13 @@ saving the XML:
    **cylinder** is the same as **box**, except the points are projected on the surface of a cylinder.
 
    **ellipsoid** is the same as **box**, except the points are projected on the surface of an ellipsoid.
+
+   **disc** is the same as **box**, except the points are projected on the surface of a disc. It is only compatible
+   with :at:`dim=2`.
+
+   **circle** is the same as **grid**, except the points are sampled along a circle so that the first and last points
+   are the same. The radius of the circle is computed such that each segment has the requested spacing. It is only
+   compatible with :at:`dim=1`.
 
    **mesh** loads the flexcomp points and elements (i.e. triangles) from a mesh file, in the same file formats as mesh
    assets. A mesh asset is not actually added to the model. Instead the vertex and face data from the mesh file are used
@@ -3633,6 +3640,13 @@ saving the XML:
 :at:`radius`, :at:`material`, :at:`rgba`, :at:`group`, :at:`flatskin`
    These attributes are directly passed through to the automatically-generated :ref:`flex<deformable-flex>` object and
    have the same meaning.
+
+.. _body-flexcomp-origin:
+
+:at:`origin`: :at-val:`real(3), "0 0 0"`
+   The origin of the flexcomp. Used for generating a volumetric mesh from an OBJ surface mesh. Each surface triangle is
+   connected to the origin to create a tetrahedron, so the resulting volumetric mesh is guaranteed to be well-formed
+   only for convex shapes.
 
 .. _flexcomp-contact:
 
@@ -4367,7 +4381,7 @@ ball joint outside the kinematic tree. Connect constraints can be specified in o
 
 - Using :ref:`body1<equality-connect-body1>` and :ref:`anchor<equality-connect-anchor>` (both required) and
   optionally :ref:`body2<equality-connect-body2>`. When using this specification, the constraint is assumed to be
-  satisfied in the configuration in which the model is defined.
+  satisfied at the configuration in which the model is defined (``mjData.qpos0``).
 - :ref:`site1<equality-connect-site1>` and :ref:`site2<equality-connect-site2>` (both required). When using this
   specification, the two sites will be pulled together by the constraint, regardless of their position in the default
   configuration. An example of this specification is shown in
@@ -4413,8 +4427,8 @@ ball joint outside the kinematic tree. Connect constraints can be specified in o
 
 :at:`anchor`: :at-val:`real(3), optional`
    Coordinates of the 3D anchor point where the two bodies are connected, in the local coordinate frame of :at:`body1`.
-   The constraint is assumed to be satisfied in the configuration in which the model is defined, which lets the compiler
-   compute the associated anchor point for :at:`body2`.
+   The constraint is assumed to be satisfied in the configuration at which the model is defined (``mjData.qpos0``),
+   which lets the compiler compute the associated anchor point for :at:`body2`.
 
 .. _equality-connect-site1:
 
@@ -4667,6 +4681,18 @@ instead of an actuator: `tendon.xml <_static/tendon.xml>`__.
 A second form of wrapping is where the tendon is constrained to pass *through* a geom rather than
 wrap around it. This is enabled automatically when a sidesite is specified and its position is inside the volume of
 the obstacle geom.
+
+.. youtube:: I2q7D0Vda-A
+   :width: 300px
+   :align: right
+
+**Visualization:** Tendon paths are visualized as in the image above, respecting the :ref:`width<tendon-spatial-width>`,
+:ref:`material<tendon-spatial-material>` and :ref:`rgba<tendon-spatial-rgba>` attributes below. A special kind of
+visualization is used for unactuated 2-point tendons with :ref:`range<tendon-spatial-range>` or
+:ref:`springlength<tendon-spatial-springlength>` of the form :at-val:`[0 X]`, with positive X. Such tendons act like a
+cable, applying force only when stretched. Therefore when not stretched, they are drawn as a catenary of
+length X, as in the clip on the right of `this example model
+<https://github.com/google-deepmind/mujoco/blob/main/test/engine/testdata/catenary.xml>`__.
 
 .. _tendon-spatial-name:
 
@@ -6399,7 +6425,7 @@ contributed by all actuators to a single scalar joint (hinge or slider). If the 
 :ref:`actuatorgravcomp<body-joint-actuatorgravcomp>` attribute is "true", this sensor will also measure contributions by
 gravity compensation forces (which are added directly to the joint and would *not* register in the
 :ref:`actuatorfrc<sensor-actuatorfrc>`) sensor. This type of sensor is important when multiple actuators act on a single
-joint or when a single actuator act on multiple joints. See :ref:`CForceRange` for details.
+joint or when a single actuator acts on multiple joints. See :ref:`CForceRange` for details.
 
 
 .. _sensor-jointactuatorfrc-name:
@@ -7227,6 +7253,45 @@ See :ref:`collision-sensors` for more details about sensors of this type.
 
 :at:`name`, :at:`noise`, :at:`user`
    See :ref:`CSensor`.
+
+
+.. _sensor-e_potential:
+
+:el-prefix:`sensor/` |-| **e_potential** (*)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+This element creates sensor that returns the potential energy.
+
+.. _sensor-e_potential-name:
+
+.. _sensor-e_potential-noise:
+
+.. _sensor-e_potential-cutoff:
+
+.. _sensor-e_potential-user:
+
+:at:`name`, :at:`noise`, :at:`cutoff`, :at:`user`
+   See :ref:`CSensor`.
+
+
+.. _sensor-e_kinetic:
+
+:el-prefix:`sensor/` |-| **e_kinetic** (*)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+This element creates sensor that returns the kinetic energy.
+
+.. _sensor-e_kinetic-name:
+
+.. _sensor-e_kinetic-noise:
+
+.. _sensor-e_kinetic-cutoff:
+
+.. _sensor-e_kinetic-user:
+
+:at:`name`, :at:`noise`, :at:`cutoff`, :at:`user`
+   See :ref:`CSensor`.
+
 
 .. _sensor-clock:
 

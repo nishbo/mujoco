@@ -94,7 +94,8 @@ Free last XML model if loaded. Called internally at each load.
 
 .. mujoco-include:: mj_saveXMLString
 
-Save spec to XML string, return 1 on success, 0 otherwise. XML saving requires that the spec first be compiled.
+Save spec to XML string, return 0 on success, -1 on failure. If the length of the output buffer is too small, returns
+the required size. XML saving requires that the spec first be compiled.
 
 .. _mj_saveXML:
 
@@ -103,7 +104,7 @@ Save spec to XML string, return 1 on success, 0 otherwise. XML saving requires t
 
 .. mujoco-include:: mj_saveXML
 
-Save spec to XML file, return 1 on success, 0 otherwise. XML saving requires that the spec first be compiled.
+Save spec to XML file, return 0 on success, -1 otherwise. XML saving requires that the spec first be compiled.
 
 .. _Mainsimulation:
 
@@ -1509,6 +1510,15 @@ Free memory allocation in mjSpec.
 
 Activate plugin. Returns 0 on success.
 
+.. _mjs_setDeepCopy:
+
+`mjs_setDeepCopy <#mjs_setDeepCopy>`__
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. mujoco-include:: mjs_setDeepCopy
+
+Turn deep copy on or off attach. Returns 0 on success.
+
 .. _Errorandmemory:
 
 Error and memory
@@ -2162,6 +2172,15 @@ Update entire scene given model state.
 .. mujoco-include:: mjv_updateSceneFromState
 
 Update entire scene from a scene state, return the number of new mjWARN_VGEOMFULL warnings.
+
+.. _mjv_copyModel:
+
+`mjv_copyModel <#mjv_copyModel>`__
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. mujoco-include:: mjv_copyModel
+
+Copy mjModel, skip large arrays not required for abstract visualization.
 
 .. _mjv_defaultSceneState:
 
@@ -3546,6 +3565,16 @@ Integrate quaternion given 3D angular velocity.
 
 Construct quaternion performing rotation from z-axis to given vector.
 
+.. _mju_mat2Rot:
+
+`mju_mat2Rot <#mju_mat2Rot>`__
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. mujoco-include:: mju_mat2Rot
+
+extract 3D rotation from an arbitrary 3x3 matrix by refining the input quaternion
+returns the number of iterations required to converge
+
 .. _mju_euler2Quat:
 
 `mju_euler2Quat <#mju_euler2Quat>`__
@@ -3898,7 +3927,7 @@ Add frame to body.
 
 .. mujoco-include:: mjs_delete
 
-Delete object corresponding to the given element.
+Delete object corresponding to the given element, return 0 on success.
 
 .. _AddNonTreeElements:
 
@@ -4154,6 +4183,15 @@ Find element in spec by name.
 .. mujoco-include:: mjs_findChild
 
 Find child body by name.
+
+.. _mjs_getParent:
+
+`mjs_getParent <#mjs_getParent>`__
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. mujoco-include:: mjs_getParent
+
+Get parent body.
 
 .. _mjs_findFrame:
 

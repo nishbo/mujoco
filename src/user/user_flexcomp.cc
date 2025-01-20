@@ -157,6 +157,7 @@ bool mjCFlexcomp::Make(mjsBody* body, char* error, int error_sz) {
   bool res;
   switch (type) {
   case mjFCOMPTYPE_GRID:
+  case mjFCOMPTYPE_CIRCLE:
     res = MakeGrid(error, error_sz);
     break;
 
@@ -548,15 +549,32 @@ bool mjCFlexcomp::MakeGrid(char* error, int error_sz) {
   // 1D
   if (dim == 1) {
     for (int ix=0; ix < count[0]; ix++) {
-      // add point
-      point.push_back(spacing[0]*(ix - 0.5*(count[0]-1)));
-      point.push_back(0);
-      point.push_back(0);
+      if (type == mjFCOMPTYPE_CIRCLE) {
+        if (ix >= count[0]-1) {
+          continue;
+        }
 
-      // add element
-      if (ix < count[0]-1) {
+        // add point
+        double theta = 2*mjPI/(count[0]-1);
+        double radius = spacing[0]/std::sin(theta/2)/2;
+        point.push_back(radius*std::cos(theta*ix));
+        point.push_back(radius*std::sin(theta*ix));
+        point.push_back(0);
+
+        // add element
         element.push_back(ix);
-        element.push_back(ix+1);
+        element.push_back(ix == count[0]-2 ? 0 : ix+1);
+      } else {
+        // add point
+        point.push_back(spacing[0]*(ix - 0.5*(count[0]-1)));
+        point.push_back(0);
+        point.push_back(0);
+
+        // add element
+        if (ix < count[0]-1) {
+          element.push_back(ix);
+          element.push_back(ix+1);
+        }
       }
     }
   }
@@ -922,8 +940,8 @@ bool mjCFlexcomp::MakeMesh(mjCModel* model, char* error, int error_sz) {
   }
 
   // check dim
-  if (def.spec.flex->dim != 2) {
-    return comperr(error, "Flex dim must be 2 in for mesh", error_sz);
+  if (def.spec.flex->dim < 2) {
+    return comperr(error, "Flex dim must be at least 2 for mesh", error_sz);
   }
 
   // load resource
@@ -972,13 +990,40 @@ bool mjCFlexcomp::MakeMesh(mjCModel* model, char* error, int error_sz) {
     mesh.RemoveRepeated();
   }
 
-  // copy faces
-  element = mesh.Face();
-
   // copy vertices, convert from float to double
   point = vector<double> (mesh.nvert()*3);
   for (int i=0; i < mesh.nvert()*3; i++) {
     point[i] = (double) mesh.Vert(i);
+  }
+
+  // copy faces or create 3D mesh
+  if (def.spec.flex->dim == 2) {
+    element = mesh.Face();
+  } else {
+    point.insert(point.begin() + 0, origin[0]);
+    point.insert(point.begin() + 1, origin[1]);
+    point.insert(point.begin() + 2, origin[2]);
+    for (int i=0; i < mesh.Face().size(); i+=3) {
+      // only add tetrahedra with positive volume
+      int tet[3] = {mesh.Face()[i+0]+1,
+                    mesh.Face()[i+1]+1,
+                    mesh.Face()[i+2]+1};
+      double edge1[3], edge2[3], edge3[3];
+      for (int i=0; i < 3; i++) {
+        edge1[i] = point[3*tet[0]+i] - origin[i];
+        edge2[i] = point[3*tet[1]+i] - origin[i];
+        edge3[i] = point[3*tet[2]+i] - origin[i];
+      }
+      double normal[3];
+      mjuu_crossvec(normal, edge1, edge2);
+      if (mjuu_dot3(normal, edge3) < mjMINVAL) {
+        continue;
+      }
+      element.push_back(0);
+      element.push_back(tet[0]);
+      element.push_back(tet[1]);
+      element.push_back(tet[2]);
+    }
   }
 
   return true;
@@ -1482,7 +1527,7 @@ void mjCFlexcomp::LoadGMSH22(char* buffer, int binary, int nodeend,
     // read elements, discard all tags
     element.reserve(numNodeTags*numElements);
     for (size_t i=0; i<numElements; i++) {
-      int nodeTag = 0, physicalEntityTag = 0, elmentModelEntityTag = 0;
+      int nodeTag = 0, physicalEntityTag = 0, elementModelEntityTag = 0;
       if (i != 0) {
         ss >> tag >> elementType >> numTags;
         if (!ss.good()) {
@@ -1490,7 +1535,7 @@ void mjCFlexcomp::LoadGMSH22(char* buffer, int binary, int nodeend,
         }
       }
       if (numTags > 0) {
-        ss >> physicalEntityTag >> elmentModelEntityTag;
+        ss >> physicalEntityTag >> elementModelEntityTag;
         if (!ss.good()) {
           throw mjCError(NULL, "Error reading Elements");
         }

@@ -134,6 +134,18 @@ PNGImage PNGImage::Load(const mjCBase* obj, mjResource* resource,
   return image;
 }
 
+// associate all child list elements with a frame and copy them to parent list, clear child list
+template <typename T>
+void MapFrame(std::vector<T*>& parent, std::vector<T*>& child,
+              mjCFrame* frame, mjCBody* parent_body) {
+  std::for_each(child.begin(), child.end(), [frame, parent_body](T* element) {
+    element->SetFrame(frame);
+    element->SetParent(parent_body);
+  });
+  parent.insert(parent.end(), child.begin(), child.end());
+  child.clear();
+}
+
 }  // namespace
 
 
@@ -751,9 +763,10 @@ mjCBody::mjCBody(mjCModel* _model) {
   model = _model;
   if (_model) compiler = &_model->spec.compiler;
 
+  refcount = 1;
   mjs_defaultBody(&spec);
   elemtype = mjOBJ_BODY;
-  parentid = -1;
+  parent = nullptr;
   weldid = -1;
   dofnum = 0;
   lastdof = -1;
@@ -786,9 +799,10 @@ mjCBody::mjCBody(mjCModel* _model) {
 
 mjCBody::mjCBody(const mjCBody& other, mjCModel* _model) {
   model = _model;
-  mjSpec* origin = model->FindSpec(mjs_getString(other.model->spec.modelname));
+  mjSpec* origin = model->FindSpec(other.compiler);
   compiler = origin ? &origin->compiler : &model->spec.compiler;
   *this = other;
+  CopyPlugin();
 }
 
 
@@ -837,6 +851,7 @@ mjCBody& mjCBody::operator+=(const mjCBody& other) {
 
   for (int i=0; i<other.bodies.size(); i++) {
     bodies.push_back(new mjCBody(*other.bodies[i], model));  // triggers recursive call
+    bodies.back()->parent = this;
     bodies.back()->frame =
         other.bodies[i]->frame ? frames[fmap[other.bodies[i]->frame]] : nullptr;
   }
@@ -858,26 +873,28 @@ mjCBody& mjCBody::operator+=(const mjCFrame& other) {
   other.model->prefix = other.prefix;
   other.model->suffix = other.suffix;
   other.model->StoreKeyframes(model);
-
-  if (other.prefix.empty() && other.suffix.empty()) {
-    throw mjCError(this, "either prefix or suffix must be non-empty");
-  }
+  mjCModel* other_model = other.model;
 
   // attach defaults
-  if (other.model != model) {
-    mjCDef* subdef = new mjCDef(*other.model->Default());
-    subdef->NameSpace(other.model);
+  if (other_model != model) {
+    mjCDef* subdef = new mjCDef(*other_model->Default());
+    subdef->NameSpace(other_model);
     *model += *subdef;
   }
 
   // copy input frame
-  mjSpec* origin = model->FindSpec(mjs_getString(other.model->spec.modelname));
-  frames.push_back(new mjCFrame(other));
+  mjSpec* origin = model->FindSpec(other.compiler);
+  mjCFrame* newframe(model->deepcopy_ ? new mjCFrame(other) : (mjCFrame*)&other);
+  frames.push_back(newframe);
   frames.back()->body = this;
   frames.back()->model = model;
   frames.back()->compiler = origin ? &origin->compiler : &model->spec.compiler;
   frames.back()->frame = other.frame;
-  frames.back()->NameSpace(other.model);
+  if (model->deepcopy_) {
+    frames.back()->NameSpace(other_model);
+  } else {
+    frames.back()->AddRef();
+  }
   int i = frames.size();
   last_attached = &frames.back()->spec;
 
@@ -899,29 +916,43 @@ mjCBody& mjCBody::operator+=(const mjCFrame& other) {
   CopyList(cameras, subtree->cameras, fmap, &other);
   CopyList(lights, subtree->lights, fmap, &other);
 
+  if (!model->deepcopy_) {
+    subtree->SetModel(model);
+    subtree->NameSpace(other_model);
+  }
+
   int nbodies = (int)subtree->bodies.size();
   for (int i=0; i<nbodies; i++) {
     if (!other.IsAncestor(subtree->bodies[i]->frame)) {
       continue;
     }
-    bodies.push_back(new mjCBody(*subtree->bodies[i], model));  // triggers recursive call
+    if (model->deepcopy_) {
+      mjCBody* newbody(new mjCBody(*subtree->bodies[i], model));  // triggers recursive call
+      bodies.push_back(newbody);
+      subtree->bodies[i]->ForgetKeyframes();
+      bodies.back()->NameSpace_(other_model, /*propagate=*/ false);
+    } else {
+      bodies.push_back(subtree->bodies[i]);
+      bodies.back()->SetModel(model);
+      bodies.back()->ResetId();
+      bodies.back()->AddRef();
+    }
+    bodies.back()->parent = this;
     bodies.back()->frame =
         subtree->bodies[i]->frame ? frames[fmap[subtree->bodies[i]->frame]] : nullptr;
-    bodies.back()->NameSpace_(other.model, /*propagate=*/ false);
-    subtree->bodies[i]->ForgetKeyframes();
   }
 
   // attach referencing elements
-  *model += *other.model;
+  *model += *other_model;
 
   // leave the source model in a clean state
-  if (other.model != model) {
-    other.model->key_pending_.clear();
+  if (other_model != model) {
+    other_model->key_pending_.clear();
   }
 
   // clear namespace and return body
-  other.model->prefix.clear();
-  other.model->suffix.clear();
+  other_model->prefix.clear();
+  other_model->suffix.clear();
   return *this;
 }
 
@@ -936,13 +967,20 @@ void mjCBody::CopyList(std::vector<T*>& dst, const std::vector<T*>& src,
     if (pframe && !pframe->IsAncestor(src[i]->frame)) {
       continue;  // skip if the element is not inside pframe
     }
-    mjSpec* origin = model->FindSpec(mjs_getString(src[i]->model->spec.modelname));
-    dst.push_back(new T(*src[i]));
+    mjSpec* origin = model->FindSpec(src[i]->compiler);
+    T* new_obj = model->deepcopy_ ? new T(*src[i]) : src[i];
+    dst.push_back(new_obj);
     dst.back()->body = this;
     dst.back()->model = model;
     dst.back()->compiler = origin ? &origin->compiler : &model->spec.compiler;
     dst.back()->id = -1;
+    dst.back()->CopyPlugin();
     dst.back()->classname = src[i]->classname;
+
+    // increment refcount if shallow copy is made
+    if (!model->deepcopy_) {
+      dst.back()->AddRef();
+    }
 
     // assign dst frame to src frame
     dst.back()->frame = src[i]->frame ? frames[fmap[src[i]->frame]] : nullptr;
@@ -965,6 +1003,73 @@ mjCBody& mjCBody::operator-=(const mjCBody& subtree) {
   }
 
   return *this;
+}
+
+
+
+// set model of this body and its subtree
+void mjCBody::SetModel(mjCModel* _model) {
+  model = _model;
+  mjSpec* origin = model->FindSpec(mjs_getString(model->spec.modelname));
+  compiler = origin ? &origin->compiler : &model->spec.compiler;
+
+  for (auto& body : bodies) {
+    body->SetModel(_model);
+  }
+  for (auto& frame : frames) {
+    frame->model = _model;
+    frame->compiler = compiler;
+  }
+  for (auto& geom : geoms) {
+    geom->model = _model;
+    geom->compiler = compiler;
+  }
+  for (auto& joint : joints) {
+    joint->model = _model;
+    joint->compiler = compiler;
+  }
+  for (auto& site : sites) {
+    site->model = _model;
+    site->compiler = compiler;
+  }
+  for (auto& camera : cameras) {
+    camera->model = _model;
+    camera->compiler = compiler;
+  }
+  for (auto& light : lights) {
+    light->model = _model;
+    light->compiler = compiler;
+  }
+}
+
+
+
+// reset ids of all objects in this body
+void mjCBody::ResetId() {
+  id = -1;
+  for (auto& body : bodies) {
+    body->ResetId();
+  }
+  for (auto& frame : frames) {
+    frame->id = -1;
+  }
+  for (auto& geom : geoms) {
+    geom->id = -1;
+  }
+  for (auto& joint : joints) {
+    joint->id = -1;
+    joint->qposadr_ = -1;
+    joint->dofadr_ = -1;
+  }
+  for (auto& site : sites) {
+    site->id = -1;
+  }
+  for (auto& camera : cameras) {
+    camera->id = -1;
+  }
+  for (auto& light : lights) {
+    light->id = -1;
+  }
 }
 
 
@@ -992,28 +1097,21 @@ void mjCBody::CopyFromSpec() {
 
 
 
+void mjCBody::CopyPlugin() {
+  model->CopyExplicitPlugin(this);
+}
+
+
+
 // destructor
 mjCBody::~mjCBody() {
-  // delete objects allocated here
-  for (int i=0; i<bodies.size(); i++) delete bodies[i];
-  for (int i=0; i<geoms.size(); i++) delete geoms[i];
-  for (int i=0; i<frames.size(); i++) delete frames[i];
-  for (int i=0; i<joints.size(); i++) delete joints[i];
-  for (int i=0; i<sites.size(); i++) delete sites[i];
-  for (int i=0; i<cameras.size(); i++) delete cameras[i];
-  for (int i=0; i<lights.size(); i++) delete lights[i];
-
-  bodies.clear();
-  geoms.clear();
-  frames.clear();
-  joints.clear();
-  sites.clear();
-  cameras.clear();
-  lights.clear();
-
-  if (spec.plugin.active && spec.plugin.name->empty()) {
-    model->DeleteElement(spec.plugin.element);
-  }
+  for (int i=0; i<bodies.size(); i++) bodies[i]->Release();
+  for (int i=0; i<geoms.size(); i++) geoms[i]->Release();
+  for (int i=0; i<frames.size(); i++) frames[i]->Release();
+  for (int i=0; i<joints.size(); i++) joints[i]->Release();
+  for (int i=0; i<sites.size(); i++) sites[i]->Release();
+  for (int i=0; i<cameras.size(); i++) cameras[i]->Release();
+  for (int i=0; i<lights.size(); i++) lights[i]->Release();
 }
 
 
@@ -1025,7 +1123,7 @@ void mjCBody::NameSpace(const mjCModel* m) {
 
 
 
-// apply prefix and suffix, propagate to all descendents or only to child bodies
+// apply prefix and suffix, propagate to all descendants or only to child bodies
 void mjCBody::NameSpace_(const mjCModel* m, bool propagate) {
   mjCBase::NameSpace(m);
   if (!plugin_instance_name.empty()) {
@@ -1078,6 +1176,7 @@ mjCBody* mjCBody::AddBody(mjCDef* _def) {
   obj->classname = _def ? _def->name : classname;
 
   bodies.push_back(obj);
+  obj->parent = this;
   return obj;
 }
 
@@ -1179,32 +1278,25 @@ mjCLight* mjCBody::AddLight(mjCDef* _def) {
 
 // create a frame in the parent body and move all contents of this body into it
 mjCFrame* mjCBody::ToFrame() {
-  if (parentid < 0) {
-    // TODO: store the parent pointer instead of using the id
-    throw mjCError(this, "parent body is not defined, please compile the model first");
-  }
-  mjCBody* parent = model->Bodies()[parentid];
   mjCFrame* newframe = parent->AddFrame(frame);
   mjuu_copyvec(newframe->spec.pos, spec.pos, 3);
   mjuu_copyvec(newframe->spec.quat, spec.quat, 4);
-  parent->bodies.insert(parent->bodies.end(), bodies.begin(), bodies.end());
-  parent->geoms.insert(parent->geoms.end(), geoms.begin(), geoms.end());
-  parent->joints.insert(parent->joints.end(), joints.begin(), joints.end());
-  parent->sites.insert(parent->sites.end(), sites.begin(), sites.end());
-  parent->cameras.insert(parent->cameras.end(), cameras.begin(), cameras.end());
-  parent->lights.insert(parent->lights.end(), lights.begin(), lights.end());
-  parent->frames.insert(parent->frames.end(), frames.begin(), frames.end());
-  bodies.clear();
-  geoms.clear();
-  joints.clear();
-  sites.clear();
-  cameras.clear();
-  lights.clear();
-  frames.clear();
+  MapFrame(parent->bodies, bodies, newframe, parent);
+  MapFrame(parent->geoms, geoms, newframe, parent);
+  MapFrame(parent->joints, joints, newframe, parent);
+  MapFrame(parent->sites, sites, newframe, parent);
+  MapFrame(parent->cameras, cameras, newframe, parent);
+  MapFrame(parent->lights, lights, newframe, parent);
+  MapFrame(parent->frames, frames, newframe, parent);
   parent->bodies.erase(
       std::remove_if(parent->bodies.begin(), parent->bodies.end(),
                      [this](mjCBody* body) { return body == this; }),
       parent->bodies.end());
+  if (model->IsCompiled()) {
+    mjCBody *world = model->bodies_[0];
+    model->ResetTreeLists();
+    model->MakeLists(world);
+  }
   return newframe;
 }
 
@@ -1560,7 +1652,6 @@ void mjCBody::Compile(void) {
 
   // set parentid and weldid of children
   for (int i=0; i<bodies.size(); i++) {
-    bodies[i]->parentid = id;
     bodies[i]->weldid = (!bodies[i]->joints.empty() ? bodies[i]->id : weldid);
   }
 
@@ -1708,13 +1799,12 @@ void mjCBody::Compile(void) {
   }
 
   // make sure mocap body is fixed child of world
-  if (mocap && (dofnum || parentid)) {
+  if (mocap && (dofnum || (parent && parent->name != "world"))) {
     throw mjCError(this, "mocap body '%s' is not a fixed child of world", name.c_str());
   }
 
   // compute body global pose (no joint transformations in qpos0)
   if (id>0) {
-    mjCBody* parent = model->Bodies()[parentid];
     mjuu_rotVecQuat(xpos0, pos, parent->xquat0);
     mjuu_addtovec(xpos0, parent->xpos0, 3);
     mjuu_mulquat(xquat0, parent->xquat0, quat);
@@ -1830,22 +1920,27 @@ mjCFrame& mjCFrame::operator+=(const mjCBody& other) {
   other.model->StoreKeyframes(model);
   other.model->prefix = "";
   other.model->suffix = "";
+  mjCModel* other_model = other.model;
 
-  if (other.prefix.empty() && other.suffix.empty()) {
-    throw mjCError(this, "either prefix or suffix must be non-empty");
+  // attach or copy the subtree
+  mjCBody* subtree = model->deepcopy_ ? new mjCBody(other, model) : (mjCBody*)&other;
+  if (model->deepcopy_) {
+    other.ForgetKeyframes();
+  } else {
+    subtree->SetModel(model);
+    subtree->ResetId();
+    subtree->AddRef();
   }
-
-  mjCBody* subtree = new mjCBody(other, model);
-  other.ForgetKeyframes();
-  other.model->prefix = subtree->prefix;
-  other.model->suffix = subtree->suffix;
+  other_model->prefix = subtree->prefix;
+  other_model->suffix = subtree->suffix;
+  subtree->SetParent(body);
   subtree->SetFrame(this);
-  subtree->NameSpace(other.model);
+  subtree->NameSpace(other_model);
 
   // attach defaults
-  if (other.model != model) {
-    mjCDef* subdef = new mjCDef(*other.model->Default());
-    subdef->NameSpace(other.model);
+  if (other_model != model) {
+    mjCDef* subdef = new mjCDef(*other_model->Default());
+    subdef->NameSpace(other_model);
     *model += *subdef;
   }
 
@@ -1854,16 +1949,16 @@ mjCFrame& mjCFrame::operator+=(const mjCBody& other) {
   last_attached = &body->bodies.back()->spec;
 
   // attach referencing elements
-  *model += *other.model;
+  *model += *other_model;
 
   // leave the source model in a clean state
-  if (other.model != model) {
-    other.model->key_pending_.clear();
+  if (other_model != model) {
+    other_model->key_pending_.clear();
   }
 
   // clear suffixes and return
-  other.model->suffix.clear();
-  other.model->prefix.clear();
+  other_model->suffix.clear();
+  other_model->prefix.clear();
   return *this;
 }
 
@@ -1880,12 +1975,6 @@ bool mjCFrame::IsAncestor(const mjCFrame* child) const {
   }
 
   return IsAncestor(child->frame);
-}
-
-
-
-void mjCFrame::SetParent(mjCBody* _body) {
-  body = _body;
 }
 
 
@@ -2220,14 +2309,6 @@ mjCGeom::mjCGeom(const mjCGeom& other) {
 
 
 
-mjCGeom::~mjCGeom() {
-  if (spec.plugin.active && spec.plugin.name->empty()) {
-    model->DeleteElement(spec.plugin.element);
-  }
-}
-
-
-
 mjCGeom& mjCGeom::operator=(const mjCGeom& other) {
   if (this != &other) {
     this->spec = other.spec;
@@ -2269,6 +2350,12 @@ void mjCGeom::CopyFromSpec() {
   plugin.element = spec.plugin.element;
   plugin.plugin_name = spec.plugin.plugin_name;
   plugin.name = spec.plugin.name;
+}
+
+
+
+void mjCGeom::CopyPlugin() {
+  model->CopyExplicitPlugin(this);
 }
 
 
@@ -3084,6 +3171,15 @@ void mjCSite::CopyFromSpec() {
   *static_cast<mjsSite*>(this) = spec;
   userdata_ = spec_userdata_;
   material_ = spec_material_;
+}
+
+
+
+void mjCSite::NameSpace(const mjCModel* m) {
+  mjCBase::NameSpace(m);
+  if (!spec_material_.empty() && model != m) {
+    spec_material_ = m->prefix + spec_material_ + m->suffix;
+  }
 }
 
 
@@ -4575,7 +4671,7 @@ void mjCMaterial::CopyFromSpec() {
 void mjCMaterial::NameSpace(const mjCModel* m) {
   mjCBase::NameSpace(m);
   for (int i=0; i<mjNTEXROLE; i++) {
-    if (!spec_textures_[i].empty() && model != m) {
+    if (!spec_textures_[i].empty()) {
       spec_textures_[i] = m->prefix + spec_textures_[i] + m->suffix;
     }
   }
@@ -5017,8 +5113,12 @@ void mjCEquality::PointToLocal() {
 
 void mjCEquality::NameSpace(const mjCModel* m) {
   mjCBase::NameSpace(m);
-  spec_name1_ = m->prefix + spec_name1_ + m->suffix;
-  spec_name2_ = m->prefix + spec_name2_ + m->suffix;
+  if (!spec_name1_.empty()) {
+    spec_name1_ = m->prefix + spec_name1_ + m->suffix;
+  }
+  if (!spec_name2_.empty()) {
+    spec_name2_ = m->prefix + spec_name2_ + m->suffix;
+  }
 }
 
 
@@ -5387,7 +5487,7 @@ void mjCTendon::Compile(void) {
       case mjWRAP_PULLEY:
         // pulley should not follow other pulley
         if (i>0 && path[i-1]->type==mjWRAP_PULLEY) {
-          throw mjCError(this, "tendon '%s' (id = %d): consequtive pulleys (pos %d)",
+          throw mjCError(this, "tendon '%s' (id = %d): consecutive pulleys (pos %d)",
                          name.c_str(), id, i);
         }
 
@@ -5512,7 +5612,9 @@ void mjCWrap::PointToLocal() {
 
 void mjCWrap::NameSpace(const mjCModel* m) {
   name = m->prefix + name + m->suffix;
-  sidesite = m->prefix + sidesite + m->suffix;
+  if (!sidesite.empty()) {
+    sidesite = m->prefix + sidesite + m->suffix;
+  }
 }
 
 
@@ -5635,14 +5737,6 @@ mjCActuator::mjCActuator(const mjCActuator& other) {
 
 
 
-mjCActuator::~mjCActuator() {
-  if (spec.plugin.active && spec.plugin.name->empty()) {
-    model->DeleteElement(spec.plugin.element);
-  }
-}
-
-
-
 mjCActuator& mjCActuator::operator=(const mjCActuator& other) {
   if (this != &other) {
     this->spec = other.spec;
@@ -5710,9 +5804,15 @@ void mjCActuator::NameSpace(const mjCModel* m) {
   if (!plugin_instance_name.empty()) {
     plugin_instance_name = m->prefix + plugin_instance_name + m->suffix;
   }
-  spec_target_ = m->prefix + spec_target_ + m->suffix;
-  spec_refsite_ = m->prefix + spec_refsite_ + m->suffix;
-  spec_slidersite_ = m->prefix + spec_slidersite_ + m->suffix;
+  if (!spec_target_.empty()) {
+    spec_target_ = m->prefix + spec_target_ + m->suffix;
+  }
+  if (!spec_refsite_.empty()) {
+    spec_refsite_ = m->prefix + spec_refsite_ + m->suffix;
+  }
+  if (!spec_slidersite_.empty()) {
+    spec_slidersite_ = m->prefix + spec_slidersite_ + m->suffix;
+  }
 }
 
 
@@ -5727,6 +5827,12 @@ void mjCActuator::CopyFromSpec() {
   plugin.element = spec.plugin.element;
   plugin.plugin_name = spec.plugin.plugin_name;
   plugin.name = spec.plugin.name;
+}
+
+
+
+void mjCActuator::CopyPlugin() {
+  model->CopyExplicitPlugin(this);
 }
 
 
@@ -5999,14 +6105,6 @@ mjCSensor::mjCSensor(const mjCSensor& other) {
 
 
 
-mjCSensor::~mjCSensor() {
-  if (spec.plugin.active && spec.plugin.name->empty()) {
-    model->DeleteElement(spec.plugin.element);
-  }
-}
-
-
-
 mjCSensor& mjCSensor::operator=(const mjCSensor& other) {
   if (this != &other) {
     this->spec = other.spec;
@@ -6063,6 +6161,12 @@ void mjCSensor::CopyFromSpec() {
 
 
 
+void mjCSensor::CopyPlugin() {
+  model->CopyExplicitPlugin(this);
+}
+
+
+
 void mjCSensor::ResolveReferences(const mjCModel* m) {
   objname_ = prefix + objname_ + suffix;
   refname_ = prefix + refname_ + suffix;
@@ -6102,7 +6206,11 @@ void mjCSensor::ResolveReferences(const mjCModel* m) {
       ((mjCGeom*)obj)->SetNotVisual();
     }
 
-  } else if (type != mjSENS_CLOCK && type != mjSENS_PLUGIN && type != mjSENS_USER) {
+  } else if (type != mjSENS_E_POTENTIAL &&
+             type != mjSENS_E_KINETIC   &&
+             type != mjSENS_CLOCK       &&
+             type != mjSENS_PLUGIN      &&
+             type != mjSENS_USER) {
     throw mjCError(this, "invalid type in sensor");
   }
 
@@ -6435,6 +6543,8 @@ void mjCSensor::Compile(void) {
     }
     break;
 
+  case mjSENS_E_POTENTIAL:
+  case mjSENS_E_KINETIC:
   case mjSENS_CLOCK:
     dim = 1;
     needstage = mjSTAGE_POS;

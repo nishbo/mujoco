@@ -16,7 +16,7 @@
 #define MUJOCO_MUJOCO_H_
 
 // header version; should match the library version as returned by mj_version()
-#define mjVERSION_HEADER 325
+#define mjVERSION_HEADER 328
 
 // needed to define size_t, fabs and log10
 #include <stdlib.h>
@@ -117,10 +117,11 @@ MJAPI int mj_saveLastXML(const char* filename, const mjModel* m, char* error, in
 // Free last XML model if loaded. Called internally at each load.
 MJAPI void mj_freeLastXML(void);
 
-// Save spec to XML string, return 1 on success, 0 otherwise.
+// Save spec to XML string, return 0 on success, -1 on failure.
+// If length of the output buffer is too small, returns the required size.
 MJAPI int mj_saveXMLString(const mjSpec* s, char* xml, int xml_sz, char* error, int error_sz);
 
-// Save spec to XML file, return 1 on success, 0 otherwise.
+// Save spec to XML file, return 0 on success, -1 otherwise.
 MJAPI int mj_saveXML(const mjSpec* s, const char* filename, char* error, int error_sz);
 
 
@@ -240,6 +241,9 @@ MJAPI void mj_deleteSpec(mjSpec* s);
 
 // Activate plugin. Returns 0 on success.
 MJAPI int mjs_activatePlugin(mjSpec* s, const char* name);
+
+// Turn deep copy on or off attach. Returns 0 on success.
+MJAPI int mjs_setDeepCopy(mjSpec* s, int deepcopy);
 
 
 //---------------------------------- Printing ------------------------------------------------------
@@ -364,7 +368,8 @@ MJAPI void mj_factorM(const mjModel* m, mjData* d);
 MJAPI void mj_solveM(const mjModel* m, mjData* d, mjtNum* x, const mjtNum* y, int n);
 
 // Half of linear solve:  x = sqrt(inv(D))*inv(L')*y
-MJAPI void mj_solveM2(const mjModel* m, mjData* d, mjtNum* x, const mjtNum* y, int n);
+MJAPI void mj_solveM2(const mjModel* m, mjData* d, mjtNum* x, const mjtNum* y,
+                      const mjtNum* sqrtInvD, int n);
 
 // Compute cvel, cdof_dot.
 MJAPI void mj_comVel(const mjModel* m, mjData* d);
@@ -691,6 +696,9 @@ MJAPI void mjv_updateScene(const mjModel* m, mjData* d, const mjvOption* opt,
 MJAPI int mjv_updateSceneFromState(const mjvSceneState* scnstate, const mjvOption* opt,
                                    const mjvPerturb* pert, mjvCamera* cam, int catmask,
                                    mjvScene* scn);
+
+// Copy mjModel, skip large arrays not required for abstract visualization.
+MJAPI void mjv_copyModel(mjModel* dest, const mjModel* src);
 
 // Set default scene state.
 MJAPI void mjv_defaultSceneState(mjvSceneState* scnstate);
@@ -1117,6 +1125,10 @@ MJAPI void mju_quatIntegrate(mjtNum quat[4], const mjtNum vel[3], mjtNum scale);
 // Construct quaternion performing rotation from z-axis to given vector.
 MJAPI void mju_quatZ2Vec(mjtNum quat[4], const mjtNum vec[3]);
 
+// extract 3D rotation from an arbitrary 3x3 matrix by refining the input quaternion
+// returns the number of iterations required to converge
+MJAPI int mju_mat2Rot(mjtNum quat[4], const mjtNum mat[9]);
+
 // Convert sequence of Euler angles (radians) to quaternion.
 // seq[0,1,2] must be in 'xyzXYZ', lower/upper-case mean intrinsic/extrinsic rotations.
 MJAPI void mju_euler2Quat(mjtNum quat[4], const mjtNum euler[3], const char* seq);
@@ -1444,8 +1456,8 @@ MJAPI mjsLight* mjs_addLight(mjsBody* body, const mjsDefault* def);
 // Add frame to body.
 MJAPI mjsFrame* mjs_addFrame(mjsBody* body, mjsFrame* parentframe);
 
-// Delete object corresponding to the given element.
-MJAPI void mjs_delete(mjsElement* element);
+// Delete object corresponding to the given element, return 0 on success.
+MJAPI int mjs_delete(mjsElement* element);
 
 
 //---------------------------------- Non-tree elements ---------------------------------------------
@@ -1536,6 +1548,9 @@ MJAPI mjsElement* mjs_findElement(mjSpec* s, mjtObj type, const char* name);
 
 // Find child body by name.
 MJAPI mjsBody* mjs_findChild(mjsBody* body, const char* name);
+
+// Get parent body.
+MJAPI mjsBody* mjs_getParent(mjsElement* element);
 
 // Find frame by name.
 MJAPI mjsFrame* mjs_findFrame(mjSpec* s, const char* name);

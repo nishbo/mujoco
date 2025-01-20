@@ -311,10 +311,10 @@ const char* MJCF[nMJCF][mjXATTRNUM] = {
               {"config", "*", "2", "key", "value"},
             {">"},
         {">"},
-        {"flexcomp", "*", "24", "name", "type", "group", "dim",
+        {"flexcomp", "*", "25", "name", "type", "group", "dim",
             "count", "spacing", "radius", "rigid", "mass", "inertiabox",
             "scale", "file", "point", "element", "texcoord", "material", "rgba",
-            "flatskin", "pos", "quat", "axisangle", "xyaxes", "zaxis", "euler"},
+            "flatskin", "pos", "quat", "axisangle", "xyaxes", "zaxis", "euler", "origin"},
         {"<"},
             {"edge", "?", "5", "equality", "solref", "solimp", "stiffness", "damping"},
             {"elasticity", "?", "4", "young", "poisson", "damping", "thickness"},
@@ -485,6 +485,8 @@ const char* MJCF[nMJCF][mjXATTRNUM] = {
         {"distance", "*", "8", "name", "geom1", "geom2", "body1", "body2", "cutoff", "noise", "user"},
         {"normal", "*", "8", "name", "geom1", "geom2", "body1", "body2", "cutoff", "noise", "user"},
         {"fromto", "*", "8", "name", "geom1", "geom2", "body1", "body2", "cutoff", "noise", "user"},
+        {"e_potential", "*", "4", "name", "cutoff", "noise", "user"},
+        {"e_kinetic", "*", "4", "name", "cutoff", "noise", "user"},
         {"clock", "*", "4", "name", "cutoff", "noise", "user"},
         {"user", "*", "9", "name", "objtype", "objname", "datatype", "needstage",
             "dim", "cutoff", "noise", "user"},
@@ -794,6 +796,7 @@ const mjMap fcomp_map[mjNFCOMPTYPES] = {
   {"ellipsoid",   mjFCOMPTYPE_ELLIPSOID},
   {"square",      mjFCOMPTYPE_SQUARE},
   {"disc",        mjFCOMPTYPE_DISC},
+  {"circle",      mjFCOMPTYPE_CIRCLE},
   {"mesh",        mjFCOMPTYPE_MESH},
   {"gmsh",        mjFCOMPTYPE_GMSH},
   {"direct",      mjFCOMPTYPE_DIRECT}
@@ -836,15 +839,13 @@ void mjXReader::PrintSchema(std::stringstream& str, bool html, bool pad) {
 void mjXReader::Parse(XMLElement* root, const mjVFS* vfs) {
   // check schema
   if (!schema.GetError().empty()) {
-    throw mjXError(0, "XML Schema Construction Error: %s\n",
-                   schema.GetError().c_str());
+    throw mjXError(0, "XML Schema Construction Error: %s", schema.GetError().c_str());
   }
 
   // validate
   XMLElement* bad = 0;
   if ((bad = schema.Check(root, 0))) {
-    throw mjXError(bad, "Schema violation: %s\n",
-                   schema.GetError().c_str());
+    throw mjXError(bad, "Schema violation: %s", schema.GetError().c_str());
   }
 
   // get model name
@@ -946,10 +947,16 @@ void mjXReader::Parse(XMLElement* root, const mjVFS* vfs) {
     Keyframe(section);
   }
 
+  // set deepcopy flag to true to copy child specs during attach calls
+  mjs_setDeepCopy(spec, true);
+
   for (XMLElement* section = FirstChildElement(root, "worldbody"); section;
        section = NextSiblingElement(section, "worldbody")) {
     Body(section, mjs_findBody(spec, "world"), nullptr, vfs);
   }
+
+  // set deepcopy flag to false to disable copying during attach in all future calls
+  mjs_setDeepCopy(spec, false);
 }
 
 
@@ -2644,6 +2651,10 @@ void mjXReader::OneFlexcomp(XMLElement* elem, mjsBody* body, const mjVFS* vfs) {
   ReadAttrInt(elem, "dim", &dflex.dim);
   ReadAttr(elem, "radius", 1, &dflex.radius, text);
   ReadAttrInt(elem, "group", &dflex.group);
+  if (!ReadAttr(elem, "origin", 3, fcomp.origin, text) &&
+      fcomp.type == mjFCOMPTYPE_MESH && dflex.dim == 3) {
+    throw mjXError(elem, "origin must be specified for mesh flexcomps if dim=3");
+  }
 
   // pose
   ReadAttr(elem, "pos", 3, fcomp.pos, text);
@@ -4163,7 +4174,13 @@ void mjXReader::Sensor(XMLElement* section) {
     }
 
     // global sensors
-    else if (type=="clock") {
+    else if (type=="e_potential") {
+      sensor->type = mjSENS_E_POTENTIAL;
+      sensor->objtype = mjOBJ_UNKNOWN;
+    } else if (type=="e_kinetic") {
+      sensor->type = mjSENS_E_KINETIC;
+      sensor->objtype = mjOBJ_UNKNOWN;
+    } else if (type=="clock") {
       sensor->type = mjSENS_CLOCK;
       sensor->objtype = mjOBJ_UNKNOWN;
     }

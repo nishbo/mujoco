@@ -170,6 +170,7 @@ struct mjData_ {
   int     nl;                // number of limit constraints
   int     nefc;              // number of constraints
   int     nJ;                // number of non-zeros in constraint Jacobian
+  int     nA;                // number of non-zeros in constraint inverse inertia matrix
   int     nisland;           // number of detected constraint islands
 
   // global properties
@@ -263,8 +264,8 @@ struct mjData_ {
   mjtNum* actuator_length;   // actuator lengths                                 (nu x 1)
   int*    moment_rownnz;     // number of non-zeros in actuator_moment row       (nu x 1)
   int*    moment_rowadr;     // row start address in colind array                (nu x 1)
-  int*    moment_colind;     // column indices in sparse Jacobian                (nu x nv)
-  mjtNum* actuator_moment;   // actuator moments                                 (nu x nv)
+  int*    moment_colind;     // column indices in sparse Jacobian                (nJmom x 1)
+  mjtNum* actuator_moment;   // actuator moments                                 (nJmom x 1)
 
   // computed by mj_fwdPosition/mj_crb
   mjtNum* crb;               // com-based composite inertia and mass             (nbody x 10)
@@ -273,7 +274,6 @@ struct mjData_ {
   // computed by mj_fwdPosition/mj_factorM
   mjtNum* qLD;               // L'*D*L factorization of M (sparse)               (nM x 1)
   mjtNum* qLDiagInv;         // 1/diag(D)                                        (nv x 1)
-  mjtNum* qLDiagSqrtInv;     // 1/sqrt(diag(D))                                  (nv x 1)
 
   // computed by mj_collisionTree
   mjtNum*  bvh_aabb_dyn;     // global bounding box (center, size)               (nbvhdynamic x 6)
@@ -318,6 +318,7 @@ struct mjData_ {
   int*    mapM2C;            // index mapping from M to C                        (nC x 1)
   int*    D_rownnz;          // dof-dof: non-zeros in each row                   (nv x 1)
   int*    D_rowadr;          // dof-dof: address of each row in D_colind         (nv x 1)
+  int*    D_diag;            // dof-dof: index of diagonal element               (nv x 1)
   int*    D_colind;          // dof-dof: column indices of non-zeros             (nD x 1)
   int*    mapM2D;            // index mapping from M to D                        (nD x 1)
   int*    mapD2M;            // index mapping from D to M                        (nM x 1)
@@ -391,8 +392,8 @@ struct mjData_ {
   // computed by mj_projectConstraint (PGS solver)
   int*    efc_AR_rownnz;     // number of non-zeros in AR                        (nefc x 1)
   int*    efc_AR_rowadr;     // row start address in colind array                (nefc x 1)
-  int*    efc_AR_colind;     // column indices in sparse AR                      (nefc x nefc)
-  mjtNum* efc_AR;            // J*inv(M)*J' + R                                  (nefc x nefc)
+  int*    efc_AR_colind;     // column indices in sparse AR                      (nA x 1)
+  mjtNum* efc_AR;            // J*inv(M)*J' + R                                  (nA x 1)
 
   //-------------------- arena-allocated: POSITION, VELOCITY dependent
 
@@ -673,6 +674,8 @@ typedef enum mjtSensor_ {         // type of sensor
   mjSENS_GEOMFROMTO,              // segment between two geoms
 
   // global sensors
+  mjSENS_E_POTENTIAL,             // potential energy
+  mjSENS_E_KINETIC,               // kinetic energy
   mjSENS_CLOCK,                   // simulation time
 
   // plugin-controlled sensors
@@ -948,19 +951,20 @@ struct mjModel_ {
   int nuser_actuator;             // number of mjtNums in actuator_user
   int nuser_sensor;               // number of mjtNums in sensor_user
   int nnames;                     // number of chars in all names
-  int nnames_map;                 // number of slots in the names hash map
   int npaths;                     // number of chars in all paths
 
-  // sizes set after mjModel construction (only affect mjData)
+  // sizes set after mjModel construction
+  int nnames_map;                 // number of slots in the names hash map
   int nM;                         // number of non-zeros in sparse inertia matrix
   int nB;                         // number of non-zeros in sparse body-dof matrix
   int nC;                         // number of non-zeros in sparse reduced dof-dof matrix
   int nD;                         // number of non-zeros in sparse dof-dof matrix
+  int nJmom;                      // number of non-zeros in sparse actuator_moment matrix
   int ntree;                      // number of kinematic trees under world body
   int ngravcomp;                  // number of bodies with nonzero gravcomp
   int nemax;                      // number of potential equality-constraint rows
-  int njmax;                      // number of available rows in constraint Jacobian
-  int nconmax;                    // number of potential contacts in contact list
+  int njmax;                      // number of available rows in constraint Jacobian (legacy)
+  int nconmax;                    // number of potential contacts in contact list (legacy)
   int nuserdata;                  // number of mjtNums reserved for the user
   int nsensordata;                // number of mjtNums in sensor data vector
   int npluginstate;               // number of mjtNums in plugin state vector
@@ -1582,14 +1586,14 @@ struct mjrContext_ {                // custom OpenGL context
   unsigned int auxColor_r[mjNAUX];  // auxiliary color buffer for resolving
 
   // materials with textures
-  int mat_texid[mjMAXMATERIAL*mjNTEXROLE];       // material texture ids (-1: no texture)
-  int mat_texuniform[mjMAXMATERIAL];            // texture repetition for 2d mapping
-  int mat_texrepeat[mjMAXMATERIAL*2];           // texture repetition for 2d mapping
+  int mat_texid[mjMAXMATERIAL*mjNTEXROLE]; // material texture ids (-1: no texture)
+  int mat_texuniform[mjMAXMATERIAL];       // uniform cube mapping
+  float mat_texrepeat[mjMAXMATERIAL*2];    // texture repetition for 2d mapping
 
   // texture objects and info
-  int ntexture;                        // number of allocated textures
-  int textureType[mjMAXTEXTURE];       // type of texture (mjtTexture) (ntexture)
-  unsigned int texture[mjMAXTEXTURE];  // texture names
+  int ntexture;                            // number of allocated textures
+  int textureType[mjMAXTEXTURE];           // type of texture (mjtTexture) (ntexture)
+  unsigned int texture[mjMAXTEXTURE];      // texture names
 
   // displaylist starting positions
   unsigned int basePlane;           // all planes from model
@@ -1628,13 +1632,13 @@ struct mjrContext_ {                // custom OpenGL context
   int windowDoublebuffer;           // is default/window framebuffer double buffered
 
   // framebuffer
-  int     currentBuffer;            // currently active framebuffer: mjFB_WINDOW or mjFB_OFFSCREEN
+  int currentBuffer;                // currently active framebuffer: mjFB_WINDOW or mjFB_OFFSCREEN
 
   // pixel output format
-  int     readPixelFormat;          // default color pixel format for mjr_readPixels
+  int readPixelFormat;              // default color pixel format for mjr_readPixels
 
   // depth output format
-  int     readDepthMap;             // depth mapping: mjDEPTH_ZERONEAR or mjDEPTH_ZEROFAR
+  int readDepthMap;                 // depth mapping: mjDEPTH_ZERONEAR or mjDEPTH_ZEROFAR
 };
 typedef struct mjrContext_ mjrContext;
 typedef enum mjtGeomInertia_ {     // type of inertia inference
@@ -2002,7 +2006,6 @@ typedef struct mjsMesh_ {          // mesh specification
   mjFloatVec* usernormal;          // user normal data
   mjFloatVec* usertexcoord;        // user texcoord data
   mjIntVec* userface;              // user vertex indices
-  mjIntVec* userfacenormal;        // user normal indices
   mjIntVec* userfacetexcoord;      // user texcoord indices
   mjsPlugin plugin;                // sdf plugin
   mjString* info;                  // message appended to compiler errors
@@ -2498,7 +2501,7 @@ struct mjUI_ {                    // entire UI
 
   // UI sizes (framebuffer units)
   int width;                      // width
-  int height;                     // current heigth
+  int height;                     // current height
   int maxheight;                  // height when all sections open
   int scroll;                     // scroll from top of UI
 
@@ -3180,6 +3183,7 @@ mjSpec* mj_makeSpec(void);
 mjSpec* mj_copySpec(const mjSpec* s);
 void mj_deleteSpec(mjSpec* s);
 int mjs_activatePlugin(mjSpec* s, const char* name);
+int mjs_setDeepCopy(mjSpec* s, int deepcopy);
 void mj_printFormattedModel(const mjModel* m, const char* filename, const char* float_format);
 void mj_printModel(const mjModel* m, const char* filename);
 void mj_printFormattedData(const mjModel* m, mjData* d, const char* filename,
@@ -3219,7 +3223,8 @@ void mj_transmission(const mjModel* m, mjData* d);
 void mj_crb(const mjModel* m, mjData* d);
 void mj_factorM(const mjModel* m, mjData* d);
 void mj_solveM(const mjModel* m, mjData* d, mjtNum* x, const mjtNum* y, int n);
-void mj_solveM2(const mjModel* m, mjData* d, mjtNum* x, const mjtNum* y, int n);
+void mj_solveM2(const mjModel* m, mjData* d, mjtNum* x, const mjtNum* y,
+                const mjtNum* sqrtInvD, int n);
 void mj_comVel(const mjModel* m, mjData* d);
 void mj_passive(const mjModel* m, mjData* d);
 void mj_subtreeVel(const mjModel* m, mjData* d);
@@ -3347,6 +3352,7 @@ void mjv_updateScene(const mjModel* m, mjData* d, const mjvOption* opt,
 int mjv_updateSceneFromState(const mjvSceneState* scnstate, const mjvOption* opt,
                              const mjvPerturb* pert, mjvCamera* cam, int catmask,
                              mjvScene* scn);
+void mjv_copyModel(mjModel* dest, const mjModel* src);
 void mjv_defaultSceneState(mjvSceneState* scnstate);
 void mjv_makeSceneState(const mjModel* m, const mjData* d,
                         mjvSceneState* scnstate, int maxgeom);
@@ -3480,6 +3486,7 @@ void mju_mat2Quat(mjtNum quat[4], const mjtNum mat[9]);
 void mju_derivQuat(mjtNum res[4], const mjtNum quat[4], const mjtNum vel[3]);
 void mju_quatIntegrate(mjtNum quat[4], const mjtNum vel[3], mjtNum scale);
 void mju_quatZ2Vec(mjtNum quat[4], const mjtNum vec[3]);
+int mju_mat2Rot(mjtNum quat[4], const mjtNum mat[9]);
 void mju_euler2Quat(mjtNum quat[4], const mjtNum euler[3], const char* seq);
 void mju_mulPose(mjtNum posres[3], mjtNum quatres[4],
                  const mjtNum pos1[3], const mjtNum quat1[4],
@@ -3575,7 +3582,7 @@ mjsGeom* mjs_addGeom(mjsBody* body, const mjsDefault* def);
 mjsCamera* mjs_addCamera(mjsBody* body, const mjsDefault* def);
 mjsLight* mjs_addLight(mjsBody* body, const mjsDefault* def);
 mjsFrame* mjs_addFrame(mjsBody* body, mjsFrame* parentframe);
-void mjs_delete(mjsElement* element);
+int mjs_delete(mjsElement* element);
 mjsActuator* mjs_addActuator(mjSpec* s, const mjsDefault* def);
 mjsSensor* mjs_addSensor(mjSpec* s);
 mjsFlex* mjs_addFlex(mjSpec* s);
@@ -3603,6 +3610,7 @@ mjSpec* mjs_findSpec(mjSpec* spec, const char* name);
 mjsBody* mjs_findBody(mjSpec* s, const char* name);
 mjsElement* mjs_findElement(mjSpec* s, mjtObj type, const char* name);
 mjsBody* mjs_findChild(mjsBody* body, const char* name);
+mjsBody* mjs_getParent(mjsElement* element);
 mjsFrame* mjs_findFrame(mjSpec* s, const char* name);
 mjsDefault* mjs_getDefault(mjsElement* element);
 const mjsDefault* mjs_findDefault(mjSpec* s, const char* classname);

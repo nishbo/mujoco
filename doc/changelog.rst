@@ -2,13 +2,72 @@
 Changelog
 =========
 
-
 Upcoming version (not yet released)
 -----------------------------------
 
+General
+^^^^^^^
+- Added :ref:`mjs_setDeepCopy` API function. When the deep copy flag is 0, attaching a model will not copy it to the
+  parent, so the original references to the child can be used to modify the parent after attachment. The default
+  behavior is to perform such a shallow copy. The old behavior of creating a deep copy of the child model while
+  attaching can be restored by setting the deep copy flag to 1.
+- Added :ref:`potential<sensor-e_potential>` and :ref:`kinetic<sensor-e_kinetic>` energy sensors.
+
+Version 3.2.7 (Jan 14, 2025)
+----------------------------
+
+Python bindings
+^^^^^^^^^^^^^^^
+1. :ref:`rollout<PyRollout>` now features native multi-threading. If a sequence of ``MjData`` instances
+   of length ``nthread`` is passed in, ``rollout`` will automatically create a thread pool and parallelize
+   the computation. The thread pool can be reused across calls, but then the function cannot be called simultaneously
+   from multiple threads. To run multiple threaded rollouts simultaneously, use the new class ``Rollout`` which
+   encapsulates the thread pool. Contribution by :github:user:`aftersomemath`.
+2. Fix global namespace pollution when using ``mjpython`` (:github:issue:`2265`).
+
+General
+^^^^^^^
+
+.. admonition:: Breaking API changes (minor)
+   :class: attention
+
+   3. The field ``mjData.qLDiagSqrtInv`` has been removed. This field is only required for the dual solvers. It is now
+      computed as-needed rather than unconditionally. Relatedly, added the corresponding argument to :ref:`mj_solveM2`.
+
+4. Reduced the memory footprint of the PGS solver's :ref:`A matrix<soDual>`. This was the last remaining dense-memory
+   allocation in MuJoCo, allowing for a significant reduction of the :ref:`dynamic memory allocation heuristic<CSize>`.
+
 Bug fixes
 ^^^^^^^^^
-1. Fixed :github:issue:`2212`, type error in ```mjx.get_data``.
+5. Fixed a bug in the box-sphere collider, depth was incorrect for deep penetrations (:github:issue:`2206`).
+6. Fixed a bug in :ref:`mj_mulM2` and added a test.
+
+Version 3.2.6 (Dec 2, 2024)
+---------------------------
+
+General
+^^^^^^^
+1. Removed rope and loop from :ref:`composite<body-composite>`. The user is encouraged to instead use the :at:`cable`
+   plugin or :ref:`flexcomp<body-flexcomp>`, respectively.
+
+MJX
+^^^
+2. Added muscle actuators.
+
+Python bindings
+^^^^^^^^^^^^^^^
+3. Provide prebuilt wheels for Python 3.13.
+4. Added ``bind`` method and removed id attribute from :ref:`mjSpec` objects. Using ids is error prone in scenarios of
+   repeated attachment and detachment. Python users are encouraged to use names for unique identification of model
+   elements.
+5. :ref:`rollout<PyRollout>` can now accept sequences of MjModel of length ``nroll``. Also removed the ``nroll``
+   argument because its value can always be inferred.
+
+Bug fixes
+^^^^^^^^^
+6. Fixed :github:issue:`2212`, type error in ``mjx.get_data``.
+7. Fixed bug introduced in 3.2.0 in handling of :ref:`texrepeat<asset-material-texrepeat>` attribute, was mistakenly
+   cast from ``float`` to ``int``, (fixed :github:issue:`2223`).
 
 Version 3.2.5 (Nov 4, 2024)
 ---------------------------
@@ -45,9 +104,9 @@ Bug fixes
 ^^^^^^^^^
 13. Fixed several bugs related to connect and weld constraints with site semantics (fixes :github:issue:`2179`, reported
     by :github:user:`yinfanyi`). The introduction of site specification to connects and welds in 3.2.3 conditionally
-    changed the semantics of `mjData.eq_obj1id` and `mjData.eq_obj2id`, but these changes were not properly propagated in
-    several places leading to incorrect computations of constraint inertia, readings of affected force/torque sensors and
-    runtime enabling/disabling of such constraints.
+    changed the semantics of `mjData.eq_obj1id` and `mjData.eq_obj2id`, but these changes were not properly propagated
+    in several places leading to incorrect computations of constraint inertia, readings of affected force/torque sensors
+    and runtime enabling/disabling of such constraints.
 14. Fixed a bug in slider-crank :ref:`transmission<geTransmission>`. The bug was introduced in 3.0.0.
 15. Fixed a bug in flex texture coordinates that prevented the correct allocation of textures in mjModel.
 

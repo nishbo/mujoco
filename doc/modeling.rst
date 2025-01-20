@@ -1284,7 +1284,7 @@ elastic structures.
 
 
 The box type, as well as the cylinder and ellipsoid types, are now deprecated in favor of 3D flex :ref:`deformable
-objects <CDeformable>``. element.
+objects <CDeformable>`. element.
 
 .. _CDeformable:
 
@@ -1607,7 +1607,7 @@ dedicated section :ref:`therein<MjxPerformance>`.
    :ref:`Numerical Integration<geIntegration>` section. The default recommended choice is the ``implicitfast``
    integrator.
 3. :ref:`Constraint Jacobians<option-jacobian>`: Try switching the Jacobian setting between "dense" and "sparse". These
-   two options use seperate code paths using dense or sparse algebra, but are otherwise compationally identical, so the
+   two options use seperate code paths using dense or sparse algebra, but are otherwise computationally identical, so the
    faster one is always preferred. The default "auto" heuristic does not always make the right choice.
 4. **Constraint solver:** If the profiler reports that a large chunk of time is spent in the solver, consider the
    following:

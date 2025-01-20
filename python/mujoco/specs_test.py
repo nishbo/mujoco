@@ -92,23 +92,21 @@ class SpecsTest(absltest.TestCase):
     self.assertEqual(site.type, mujoco.mjtGeom.mjGEOM_BOX)
     np.testing.assert_array_equal(site.userdata, [1, 2, 3, 4, 5, 6])
 
-    # Check that the site and body have no id before compilation.
-    self.assertEqual(body.id, -1)
-    self.assertEqual(site.id, -1)
-
     # Compile the spec and check for expected values in the model.
     model = spec.compile()
-    self.assertEqual(spec.worldbody.id, 0)
-    self.assertEqual(body.id, 1)
-    self.assertEqual(site.id, 0)
+    data = mujoco.MjData(model)
+    mujoco.mj_forward(model, data)
     self.assertEqual(model.nbody, 2)  # 2 bodies, including the world body
-    np.testing.assert_array_equal(model.body_pos[1], [1, 2, 3])
-    np.testing.assert_array_equal(model.body_quat[1], [0, 1, 0, 0])
+    np.testing.assert_array_equal(model.bind(body).pos, [1, 2, 3])
+    np.testing.assert_array_equal(model.bind(body).quat, [0, 1, 0, 0])
+    np.testing.assert_array_equal(data.bind(body).xpos, [1, 2, 3])
     self.assertEqual(model.nsite, 1)
     self.assertEqual(model.nuser_site, 6)
     np.testing.assert_array_equal(model.site_user[0], [1, 2, 3, 4, 5, 6])
 
-    self.assertEqual(spec.to_xml(), textwrap.dedent("""\
+    self.assertEqual(
+        spec.to_xml(),
+        textwrap.dedent("""\
         <mujoco model="MuJoCo Model">
           <compiler angle="radian"/>
 
@@ -120,7 +118,8 @@ class SpecsTest(absltest.TestCase):
             </body>
           </worldbody>
         </mujoco>
-    """),)
+    """),
+    )
 
   def test_kwarg(self):
     # Create a spec.
@@ -471,7 +470,7 @@ class SpecsTest(absltest.TestCase):
     # Try to compile, get error.
     expected_error = (
         'Error: size 0 must be positive in geom\n'
-        + f'Element name \'MyGeom\', id 0, geom added on line {added_on_line}'
+        + f"Element name 'MyGeom', id 0, geom added on line {added_on_line}"
     )
     with self.assertRaisesRegex(ValueError, expected_error):
       spec.compile()
@@ -535,7 +534,9 @@ class SpecsTest(absltest.TestCase):
     spec.worldbody.add_geom(main)
 
     spec.compile()
-    self.assertEqual(spec.to_xml(), textwrap.dedent("""\
+    self.assertEqual(
+        spec.to_xml(),
+        textwrap.dedent("""\
         <mujoco model="test">
           <compiler angle="radian"/>
 
@@ -551,7 +552,8 @@ class SpecsTest(absltest.TestCase):
             <geom/>
           </worldbody>
         </mujoco>
-    """))
+    """),
+    )
     spec = mujoco.MjSpec()
     spec.modelname = 'test'
 
@@ -565,7 +567,9 @@ class SpecsTest(absltest.TestCase):
     spec.worldbody.add_geom(main)
 
     spec.compile()
-    self.assertEqual(spec.to_xml(), textwrap.dedent("""\
+    self.assertEqual(
+        spec.to_xml(),
+        textwrap.dedent("""\
         <mujoco model="test">
           <compiler angle="radian"/>
 
@@ -581,20 +585,37 @@ class SpecsTest(absltest.TestCase):
             <geom/>
           </worldbody>
         </mujoco>
-    """))
+    """),
+    )
 
   def test_element_list(self):
     spec = mujoco.MjSpec()
     sensor1 = spec.add_sensor()
     sensor2 = spec.add_sensor()
     sensor3 = spec.add_sensor()
+    actuator1 = spec.add_actuator()
+    actuator2 = spec.add_actuator()
+    actuator3 = spec.add_actuator()
     sensor1.name = 'sensor1'
     sensor2.name = 'sensor2'
     sensor3.name = 'sensor3'
+    actuator1.name = 'actuator1'
+    actuator2.name = 'actuator2'
+    actuator3.name = 'actuator3'
     self.assertLen(spec.sensors, 3)
+    self.assertLen(spec.actuators, 3)
     self.assertEqual(spec.sensors[0].name, 'sensor1')
     self.assertEqual(spec.sensors[1].name, 'sensor2')
     self.assertEqual(spec.sensors[2].name, 'sensor3')
+    self.assertEqual(spec.actuators[0].name, 'actuator1')
+    self.assertEqual(spec.actuators[1].name, 'actuator2')
+    self.assertEqual(spec.actuators[2].name, 'actuator3')
+    self.assertEqual(spec.find_sensor('sensor1'), sensor1)
+    self.assertEqual(spec.find_sensor('sensor2'), sensor2)
+    self.assertEqual(spec.find_sensor('sensor3'), sensor3)
+    self.assertEqual(spec.find_actuator('actuator1'), actuator1)
+    self.assertEqual(spec.find_actuator('actuator2'), actuator2)
+    self.assertEqual(spec.find_actuator('actuator3'), actuator3)
 
   def test_body_list(self):
     main_xml = """
@@ -625,6 +646,10 @@ class SpecsTest(absltest.TestCase):
     self.assertEqual(spec.bodies[2].name, 'body2')
     self.assertEqual(spec.bodies[3].name, 'body3')
     self.assertEqual(spec.bodies[4].name, 'body4')
+    self.assertEqual(spec.bodies[1].parent, spec.worldbody)
+    self.assertEqual(spec.bodies[2].parent, spec.worldbody)
+    self.assertEqual(spec.bodies[3].parent, spec.bodies[1])
+    self.assertEqual(spec.bodies[4].parent, spec.bodies[3])
     self.assertLen(spec.worldbody.find_all(bodytype), 4)
     self.assertLen(spec.bodies[1].find_all(bodytype), 2)
     self.assertLen(spec.bodies[3].find_all(bodytype), 1)
@@ -650,16 +675,39 @@ class SpecsTest(absltest.TestCase):
     self.assertEqual(spec.bodies[3].sites[2].name, 'site3')
     self.assertEqual(spec.bodies[3].sites[3].name, 'site4')
     self.assertEqual(spec.bodies[4].sites[0].name, 'site5')
+    self.assertEqual(spec.bodies[3].sites[0].parent, spec.bodies[3])
+    self.assertEqual(spec.bodies[3].sites[1].parent, spec.bodies[3])
+    self.assertEqual(spec.bodies[3].sites[2].parent, spec.bodies[3])
+    self.assertEqual(spec.bodies[3].sites[3].parent, spec.bodies[3])
+    self.assertEqual(spec.bodies[4].sites[0].parent, spec.bodies[4])
     with self.assertRaises(ValueError) as cm:
       spec.worldbody.find_all('actuator')
     self.assertEqual(
         str(cm.exception),
         'body.find_all supports the types: body, frame, geom, site,'
-        ' light, camera.',
+        ' joint, light, camera.',
     )
     body4 = spec.worldbody.find_all('body')[3]
     body4.name = 'body4_new'
     self.assertEqual(spec.bodies[4].name, 'body4_new')
+
+  def test_geom_list(self):
+    main_xml = """
+    <mujoco>
+      <worldbody>
+        <body name="body1"/>
+      </worldbody>
+    </mujoco>
+    """
+    spec = mujoco.MjSpec.from_string(main_xml)
+    geom1 = spec.worldbody.add_geom(name='geom1')
+    geom2 = spec.worldbody.add_geom(name='geom2')
+    geom3 = spec.find_body('body1').add_geom(name='geom3')
+
+    self.assertEqual(spec.geoms, [geom1, geom2, geom3])
+    self.assertEqual(spec.find_geom('geom1'), geom1)
+    self.assertEqual(spec.find_geom('geom2'), geom2)
+    self.assertEqual(spec.find_geom('geom3'), geom3)
 
   def test_iterators(self):
     spec = mujoco.MjSpec()
@@ -693,8 +741,10 @@ class SpecsTest(absltest.TestCase):
     geom = spec.worldbody.add_geom()
     geom.type = mujoco.mjtGeom.mjGEOM_MESH
     geom.meshname = 'cube'
-    model = spec.compile({'cube.obj': cube})
+    spec.assets = {'cube.obj': cube}
+    model = spec.compile()
     self.assertEqual(model.nmeshvert, 8)
+    self.assertEqual(spec.assets['cube.obj'], cube)
 
   def test_include(self):
     included_xml = """
@@ -706,13 +756,17 @@ class SpecsTest(absltest.TestCase):
         </worldbody>
       </mujoco>
     """
-    spec = mujoco.MjSpec.from_string(textwrap.dedent("""
+    spec = mujoco.MjSpec.from_string(
+        textwrap.dedent("""
       <mujoco model="MuJoCo Model">
         <include file="included.xml"/>
       </mujoco>
-    """), {'included.xml': included_xml.encode('utf-8')})
-    self.assertEqual(spec.worldbody.first_body().first_geom().type,
-                     mujoco.mjtGeom.mjGEOM_BOX)
+    """),
+        {'included.xml': included_xml.encode('utf-8')},
+    )
+    self.assertEqual(
+        spec.worldbody.first_body().first_geom().type, mujoco.mjtGeom.mjGEOM_BOX
+    )
 
   def test_delete(self):
     file_path = epath.resource_path("mujoco") / "testdata" / "model.xml"
@@ -727,6 +781,7 @@ class SpecsTest(absltest.TestCase):
     self.assertIsNotNone(head)
     site = head.first_site()
     self.assertIsNotNone(site)
+    self.assertEqual(site, spec.find_site('head'))
 
     site.delete()
     spec.sensors[-1].delete()
@@ -865,24 +920,49 @@ class SpecsTest(absltest.TestCase):
     with self.assertRaises(IndexError):
       material.textures[-1] = 'x'
 
+  def test_assign_texture(self):
+    spec = mujoco.MjSpec()
+    texture = spec.add_texture(name='texture', height=2, width=2)
+    texture.data = np.zeros((2, 2, 3), dtype=np.uint8).tobytes()
+    spec.compile()
+
   def test_attach_units(self):
     child = mujoco.MjSpec()
     parent = mujoco.MjSpec()
     parent.compiler.degree = not child.compiler.degree
     body = child.worldbody.add_body(euler=[90, 0, 0])
     frame = parent.worldbody.add_frame(euler=[-mujoco.mjPI / 2, 0, 0])
-    frame.attach_body(body, 'child-', '')
+    frame.attach_body(body, prefix='child-')
     model = parent.compile()
     np.testing.assert_almost_equal(model.body_quat[1], [1, 0, 0, 0])
 
-  def test_attach_body_to_site(self):
-    child = mujoco.MjSpec()
+  def test_attach_to_site(self):
     parent = mujoco.MjSpec()
-    site = parent.worldbody.add_site(pos=[1, 2, 3])
-    body = child.worldbody.add_body()
-    self.assertIsNotNone(site.attach(body, '_', ''))
-    model = parent.compile()
-    np.testing.assert_array_equal(model.body_pos[1], [1, 2, 3])
+    site = parent.worldbody.add_site(pos=[1, 2, 3], quat=[0, 0, 0, 1])
+
+    # Attach body to site and compile.
+    child1 = mujoco.MjSpec()
+    body1 = child1.worldbody.add_body()
+    self.assertIs(body1, site.attach_body(body1, prefix='_'))
+    body1.pos = [1, 1, 1]
+    model1 = parent.compile()
+    self.assertIsNotNone(model1)
+    self.assertEqual(model1.nbody, 2)
+    np.testing.assert_array_equal(model1.body_pos[1], [0, 1, 4])
+    np.testing.assert_array_equal(model1.body_quat[1], [0, 0, 0, 1])
+
+    # Attach entire spec to site and compile again.
+    child2 = mujoco.MjSpec()
+    body2 = child2.worldbody.add_body(name='body')
+    self.assertIsNotNone(site.attach(child2, prefix='child-'))
+    body2.pos = [-1, -1, -1]
+    model2 = parent.compile()
+    self.assertIsNotNone(model2)
+    self.assertEqual(model2.nbody, 3)
+    np.testing.assert_array_equal(model2.body_pos[1], [0, 1, 4])
+    np.testing.assert_array_equal(model2.body_pos[2], [2, 3, 2])
+    np.testing.assert_array_equal(model2.body_quat[1], [0, 0, 0, 1])
+    np.testing.assert_array_equal(model2.body_quat[2], [0, 0, 0, 1])
 
   def test_body_to_frame(self):
     spec = mujoco.MjSpec()
@@ -890,6 +970,34 @@ class SpecsTest(absltest.TestCase):
     spec.compile()
     frame = body.to_frame()
     np.testing.assert_array_equal(frame.pos, [1, 2, 3])
+
+  def test_attach_to_frame(self):
+    parent = mujoco.MjSpec()
+    frame = parent.worldbody.add_frame(pos=[1, 2, 3], quat=[0, 0, 0, 1])
+
+    # Attach body to frame and compile.
+    child1 = mujoco.MjSpec()
+    body1 = child1.worldbody.add_body()
+    self.assertIs(body1, frame.attach_body(body1, prefix='_'))
+    body1.pos = [1, 1, 1]
+    model1 = parent.compile()
+    self.assertIsNotNone(model1)
+    self.assertEqual(model1.nbody, 2)
+    np.testing.assert_array_equal(model1.body_pos[1], [0, 1, 4])
+    np.testing.assert_array_equal(model1.body_quat[1], [0, 0, 0, 1])
+
+    # Attach entire spec to frame and compile again.
+    child2 = mujoco.MjSpec()
+    body2 = child2.worldbody.add_body(name='body')
+    self.assertIsNotNone(frame.attach(child2, prefix='child-'))
+    body2.pos = [-1, -1, -1]
+    model2 = parent.compile()
+    self.assertIsNotNone(model2)
+    self.assertEqual(model2.nbody, 3)
+    np.testing.assert_array_equal(model2.body_pos[1], [0, 1, 4])
+    np.testing.assert_array_equal(model2.body_pos[2], [2, 3, 2])
+    np.testing.assert_array_equal(model2.body_quat[1], [0, 0, 0, 1])
+    np.testing.assert_array_equal(model2.body_quat[2], [0, 0, 0, 1])
 
 
 if __name__ == '__main__':

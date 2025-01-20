@@ -157,6 +157,118 @@ class SupportTest(parameterized.TestCase):
         i = i if n is not None else -1
         self.assertEqual(support.name2id(mx, obj, n), i)
 
+  def test_bind(self):
+    xml = """
+    <mujoco model="test_bind_model">
+        <worldbody>
+          <body pos="1 2 3" name="body1">
+            <joint axis="1 0 0" type="slide" name="joint1"/>
+            <geom size="1 2 3" type="box" name="geom1"/>
+          </body>
+          <body pos="4 5 6" name="body2">
+            <joint axis="0 1 0" type="slide" name="joint2"/>
+            <geom size="4 5 6" type="box" name="geom2"/>
+          </body>
+          <body pos="7 8 9" name="body3">
+            <joint axis="0 0 1" type="slide" name="joint3"/>
+            <geom size="7 8 9" type="box" name="geom3"/>
+          </body>
+        </worldbody>
+
+        <actuator>
+          <motor name="actuator1" joint="joint1"/>
+          <motor name="actuator2" joint="joint2"/>
+          <motor name="actuator3" joint="joint3"/>
+        </actuator>
+
+        <sensor>
+          <framepos name="sensor1" objtype="body" objname="body1"/>
+          <framepos name="sensor2" objtype="body" objname="body2"/>
+          <framepos name="sensor3" objtype="body" objname="body3"/>
+        </sensor>
+    </mujoco>
+    """
+
+    s = mujoco.MjSpec.from_string(xml)
+    m = s.compile()
+    d = mujoco.MjData(m)
+    mx = mjx.put_model(m)
+    dx = mjx.put_data(m, d)
+    mujoco.mj_step(m, d)
+    dx = mjx.step(mx, dx)
+
+    # test getting
+    np.testing.assert_array_equal(mx.bind(s.bodies).pos, m.body_pos)
+    np.testing.assert_array_equal(dx.bind(mx, s.bodies).xpos, d.xpos)
+    for i in range(m.nbody):
+      np.testing.assert_array_equal(m.bind(s.bodies[i]).pos, m.body_pos[i, :])
+      np.testing.assert_array_equal(mx.bind(s.bodies[i]).pos, m.body_pos[i, :])
+      np.testing.assert_array_equal(d.bind(s.bodies[i]).xpos, d.xpos[i, :])
+      np.testing.assert_array_equal(
+          dx.bind(mx, s.bodies[i]).xpos, d.xpos[i, :]
+          )
+
+    np.testing.assert_array_equal(mx.bind(s.geoms).size, m.geom_size)
+    np.testing.assert_array_equal(dx.bind(mx, s.geoms).xpos, d.geom_xpos)
+    for i in range(m.ngeom):
+      np.testing.assert_array_equal(m.bind(s.geoms[i]).size, m.geom_size[i, :])
+      np.testing.assert_array_equal(mx.bind(s.geoms[i]).size, m.geom_size[i, :])
+      np.testing.assert_array_equal(d.bind(s.geoms[i]).xpos, d.geom_xpos[i, :])
+      np.testing.assert_array_equal(
+          dx.bind(mx, s.geoms[i]).xpos, d.geom_xpos[i, :]
+      )
+
+    np.testing.assert_array_equal(mx.bind(s.joints).axis, m.jnt_axis)
+    for i in range(m.njnt):
+      np.testing.assert_array_equal(m.bind(s.joints[i]).axis, m.jnt_axis[i, :])
+      np.testing.assert_array_equal(mx.bind(s.joints[i]).axis, m.jnt_axis[i, :])
+
+    np.testing.assert_array_equal(dx.bind(mx, s.actuators).ctrl, d.ctrl)
+    for i in range(m.nu):
+      np.testing.assert_array_equal(d.bind(s.actuators[i]).ctrl, d.ctrl[i])
+      np.testing.assert_array_equal(
+          dx.bind(mx, s.actuators[i]).ctrl, d.ctrl[i]
+      )
+
+    np.testing.assert_array_equal(
+        dx.bind(mx, s.sensors).sensordata, d.sensordata
+    )
+    for i in range(m.nsensor):
+      np.testing.assert_array_equal(
+          dx.bind(mx, s.sensors[i]).sensordata,
+          d.sensordata[m.sensor_adr[i] : m.sensor_adr[i] + m.sensor_dim[i]],
+      )
+
+    # test setting
+    np.testing.assert_array_equal(d.ctrl, [0, 0, 0])
+    np.testing.assert_array_equal(dx.bind(mx, s.actuators).ctrl, d.ctrl)
+    dx2 = dx.bind(mx, s.actuators).set('ctrl', [1, 2, 3])
+    np.testing.assert_array_equal(dx2.bind(mx, s.actuators).ctrl, [1, 2, 3])
+    np.testing.assert_array_equal(dx.bind(mx, s.actuators).ctrl, [0, 0, 0])
+    dx3 = dx.bind(mx, s.actuators[1:]).set('ctrl', [4, 5])
+    np.testing.assert_array_equal(dx3.bind(mx, s.actuators).ctrl, [0, 4, 5])
+    np.testing.assert_array_equal(dx.bind(mx, s.actuators).ctrl, [0, 0, 0])
+    dx4 = dx.bind(mx, s.actuators[1]).set('ctrl', [6])
+    np.testing.assert_array_equal(dx4.bind(mx, s.actuators).ctrl, [0, 6, 0])
+    np.testing.assert_array_equal(dx.bind(mx, s.actuators).ctrl, [0, 0, 0])
+    dx5 = dx.bind(mx, s.actuators[1]).set('ctrl', 7)
+    np.testing.assert_array_equal(dx5.bind(mx, s.actuators).ctrl, [0, 7, 0])
+    np.testing.assert_array_equal(dx.bind(mx, s.actuators).ctrl, [0, 0, 0])
+
+    # test invalid name
+    with self.assertRaises(AttributeError):
+      print(dx.bind(mx, s.geoms).ctrl)
+    with self.assertRaises(AttributeError):
+      print(dx.bind(mx, s.actuators).actuator_ctrl)
+    with self.assertRaises(AttributeError):
+      print(dx.bind(mx, s.actuators).set('actuator_ctrl', [1, 2, 3]))
+    with self.assertRaises(KeyError, msg='invalid name: invalid_actuator_name'):
+      s.actuators[0].name = 'invalid_actuator_name'
+      print(dx.bind(mx, s.actuators).set('ctrl', [1, 2, 3]))
+    with self.assertRaises(KeyError, msg='invalid name: invalid_geom_name'):
+      s.geoms[0].name = 'invalid_geom_name'
+      print(mx.bind(s.geoms).pos)
+
   _CONTACTS = """
     <mujoco>
       <worldbody>
@@ -220,6 +332,211 @@ class SupportTest(parameterized.TestCase):
       force = force.at[:3].set(dx.contact.frame[j] @ force[:3])
       force = force.at[3:].set(dx.contact.frame[j] @ force[3:])
       np.testing.assert_allclose(result, force, rtol=1e-5, atol=2)
+
+  def test_muscle_gain_length(self):
+    lmin = 0.5
+    lmax = 1.5
+    np.testing.assert_allclose(
+        support.muscle_gain_length(0, lmin, lmax),
+        jp.zeros(1),
+        rtol=1e-5,
+        atol=1e-5,
+    )
+    np.testing.assert_allclose(
+        support.muscle_gain_length(0.5, lmin, lmax),
+        jp.zeros(1),
+        rtol=1e-5,
+        atol=1e-5,
+    )
+    np.testing.assert_allclose(
+        support.muscle_gain_length(0.6, lmin, lmax),
+        jp.array([0.08]),
+        rtol=1e-5,
+        atol=1e-5,
+    )
+    np.testing.assert_allclose(
+        support.muscle_gain_length(0.75, lmin, lmax),
+        jp.array([0.5]),
+        rtol=1e-5,
+        atol=1e-5,
+    )
+    np.testing.assert_allclose(
+        support.muscle_gain_length(1.0, lmin, lmax),
+        jp.ones(1),
+        rtol=1e-5,
+        atol=1e-5,
+    )
+    np.testing.assert_allclose(
+        support.muscle_gain_length(1.25, lmin, lmax),
+        jp.array([0.5]),
+        rtol=1e-5,
+        atol=1e-5,
+    )
+    np.testing.assert_allclose(
+        support.muscle_gain_length(1.5, lmin, lmax),
+        jp.zeros(1),
+        rtol=1e-5,
+        atol=1e-5,
+    )
+    np.testing.assert_allclose(
+        support.muscle_gain_length(2.0, lmin, lmax),
+        jp.zeros(1),
+        rtol=1e-5,
+        atol=1e-5,
+    )
+
+  def test_muscle_gain(self):
+    length = jp.array([1.0])
+    lengthrange = jp.array([0.0, 1.0])
+    acc0 = jp.array([1.0])
+    prm = jp.array([0.0, 1.0, 1.0, 200.0, 0.5, 3.0, 1.0, 0.0, 2.0, 0.0])
+
+    # V <= -1
+    vel = jp.array([-1.5])
+    np.testing.assert_allclose(
+        support.muscle_gain(length, vel, lengthrange, acc0, prm),
+        jp.array([-0.0]),
+        rtol=1e-5,
+        atol=1e-5,
+    )
+
+    # V <= 0
+    vel = jp.array([-0.5])
+    np.testing.assert_allclose(
+        support.muscle_gain(length, vel, lengthrange, acc0, prm),
+        jp.array([-0.25]),
+        rtol=1e-5,
+        atol=1e-5,
+    )
+
+    # V <= y
+    vel = jp.array([0.5])
+    np.testing.assert_allclose(
+        support.muscle_gain(length, vel, lengthrange, acc0, prm),
+        jp.array([-1.75]),
+        rtol=1e-5,
+        atol=1e-5,
+    )
+
+    # V > y
+    vel = jp.array([1.5])
+    np.testing.assert_allclose(
+        support.muscle_gain(length, vel, lengthrange, acc0, prm),
+        jp.array([-2.0]),
+        rtol=1e-5,
+        atol=1e-5,
+    )
+
+    # force < 0
+    prm = prm.at[2].set(-1.0)
+    np.testing.assert_allclose(
+        support.muscle_gain(length, vel, lengthrange, acc0, prm),
+        jp.array([-400.0]),
+        rtol=1e-5,
+        atol=1e-5,
+    )
+
+  def test_muscle_bias(self):
+    lengthrange = jp.array([0.0, 1.0])
+    acc0 = jp.array([1.0])
+    prm = jp.array([0.0, 1.0, 1.0, 200.0, 0.5, 3.0, 1.5, 1.3, 1.2, 0.0])
+
+    # L <= 1
+    length = jp.array([0.5])
+    np.testing.assert_allclose(
+        support.muscle_bias(length, lengthrange, acc0, prm),
+        jp.array([0.0]),
+        rtol=1e-5,
+        atol=1e-5,
+    )
+
+    # L <= b
+    length = jp.array([1.5])
+    np.testing.assert_allclose(
+        support.muscle_bias(length, lengthrange, acc0, prm),
+        jp.array([-0.1625]),
+        rtol=1e-5,
+        atol=1e-5,
+    )
+
+    # L > b
+    length = jp.array([2.5])
+    np.testing.assert_allclose(
+        support.muscle_bias(length, lengthrange, acc0, prm),
+        jp.array([-1.3]),
+        rtol=1e-5,
+        atol=1e-5,
+    )
+
+    # force < 0
+    prm = prm.at[2].set(-1.0)
+    np.testing.assert_allclose(
+        support.muscle_bias(length, lengthrange, acc0, prm),
+        jp.array([-260.0]),
+        rtol=1e-5,
+        atol=1e-5,
+    )
+
+  def test_smooth_muscle_dynamics(self):
+    # compute time constant as in Millard et al. (2013)
+    # https://doi.org/10.1115/1.4023390
+    def _muscle_dynamics_millard(ctrl, act, prm):
+      ctrlclamp = jp.clip(ctrl, 0, 1)
+      actclamp = jp.clip(act, 0, 1)
+
+      tau0 = prm[0] * (0.5 + 1.5 * actclamp)
+      tau1 = prm[1] / (0.5 + 1.5 * actclamp)
+      tau = jp.where(ctrlclamp > act, tau0, tau1)
+
+      return (ctrlclamp - act) / jp.maximum(mujoco.mjMINVAL, tau)
+
+    prm = jp.array([0.01, 0.04, 0.0])
+
+    # exact equality if tau_smooth = 0
+    for ctrl in [-0.1, 0.0, 0.4, 0.5, 1.0, 1.0]:
+      for act in [-0.1, 0.0, 0.4, 0.5, 1.0, 1.1]:
+        actdot_old = _muscle_dynamics_millard(ctrl, act, prm)
+        actdot_new = support.muscle_dynamics(ctrl, act, prm)
+        np.testing.assert_allclose(actdot_old, actdot_new, rtol=1e-5, atol=1e-5)
+
+    # positive tau_smooth
+    tau_smooth = 0.2
+    prm = prm.at[2].set(tau_smooth)
+    act = 0.5
+    eps = 1.0e-6
+
+    ctrl = 0.4 - eps  # smaller than act by just over 0.5 * tau_smooth
+    np.testing.assert_allclose(
+        _muscle_dynamics_millard(ctrl, act, prm),
+        support.muscle_dynamics(ctrl, act, prm),
+        rtol=1e-5,
+        atol=1e-5,
+    )
+
+    ctrl = 0.6 + eps  # larger than act by just over 0.5 * tau_smooth
+    np.testing.assert_allclose(
+        _muscle_dynamics_millard(ctrl, act, prm),
+        support.muscle_dynamics(ctrl, act, prm),
+        rtol=1e-5,
+        atol=1e-5,
+    )
+
+    # right in the middle should give average of time constants
+    tau_act = 0.2
+    tau_deact = 0.3
+    for dctrl in [0.0, 0.1, 0.2, 1.0, 1.1]:
+      lower = support.muscle_dynamics_timescale(
+          -dctrl, tau_act, tau_deact, tau_smooth
+      )
+      upper = support.muscle_dynamics_timescale(
+          dctrl, tau_act, tau_deact, tau_smooth
+      )
+      np.testing.assert_allclose(
+          0.5 * (upper + lower),
+          0.5 * (tau_act + tau_deact),
+          rtol=1e-5,
+          atol=1e-5,
+      )
 
 
 if __name__ == '__main__':

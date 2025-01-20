@@ -151,6 +151,7 @@ mjCMesh::mjCMesh(mjCModel* _model, mjCDef* _def) {
 
   // set model, def
   model = _model;
+  if (_model) compiler = &_model->spec.compiler;
   classname = (_def ? _def->name : (_model ? "main" : ""));
 
   // in case this body is not compiled
@@ -268,12 +269,15 @@ void mjCMesh::CopyFromSpec() {
 
 
 
+void mjCMesh::CopyPlugin() {
+  model->CopyExplicitPlugin(this);
+}
+
+
+
 mjCMesh::~mjCMesh() {
   if (center_) mju_free(center_);
   if (graph_) mju_free(graph_);
-  if (spec.plugin.active && spec.plugin.name->empty()) {
-    model->DeleteElement(spec.plugin.element);
-  }
 }
 
 
@@ -1975,6 +1979,7 @@ mjCSkin::mjCSkin(mjCModel* _model) {
 
   // set model pointer
   model = _model;
+  if (model) compiler = &model->spec.compiler;
 
   // clear data
   spec_file_.clear();
@@ -2632,6 +2637,7 @@ mjCFlex::mjCFlex(mjCModel* _model) {
 
   // set model
   model = _model;
+  if (_model) compiler = &_model->spec.compiler;
 
   // clear internal variables
   nvert = 0;
@@ -2938,6 +2944,16 @@ void mjCFlex::Compile(const mjVFS* vfs) {
 
   // create bounding volume hierarchy
   CreateBVH();
+
+  // compute bounding box coordinates
+  vert0_.assign(3*nvert, 0);
+  const mjtNum* bvh = tree.Bvh().data();
+  for (int j=0; j < nvert; j++) {
+    for (int k=0; k < 3; k++) {
+      double size = 2*(bvh[k+3] - radius);
+      vert0_[3*j+k] = (vertxpos[3*j+k] - bvh[k]) / size + 0.5;
+    }
+  }
 }
 
 

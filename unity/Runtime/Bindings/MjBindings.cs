@@ -109,7 +109,7 @@ public const int mjMAXLINEPNT = 1000;
 public const int mjMAXPLANEGRID = 200;
 public const bool THIRD_PARTY_MUJOCO_MJXMACRO_H_ = true;
 public const bool THIRD_PARTY_MUJOCO_MUJOCO_H_ = true;
-public const int mjVERSION_HEADER = 325;
+public const int mjVERSION_HEADER = 328;
 
 
 // ------------------------------------Enums------------------------------------
@@ -377,9 +377,11 @@ public enum mjtSensor : int{
   mjSENS_GEOMDIST = 37,
   mjSENS_GEOMNORMAL = 38,
   mjSENS_GEOMFROMTO = 39,
-  mjSENS_CLOCK = 40,
-  mjSENS_PLUGIN = 41,
-  mjSENS_USER = 42,
+  mjSENS_E_POTENTIAL = 40,
+  mjSENS_E_KINETIC = 41,
+  mjSENS_CLOCK = 42,
+  mjSENS_PLUGIN = 43,
+  mjSENS_USER = 44,
 }
 public enum mjtStage : int{
   mjSTAGE_NONE = 0,
@@ -4852,6 +4854,7 @@ public unsafe struct mjData_ {
   public int nl;
   public int nefc;
   public int nJ;
+  public int nA;
   public int nisland;
   public double time;
   public fixed double energy[2];
@@ -4917,7 +4920,6 @@ public unsafe struct mjData_ {
   public double* qM;
   public double* qLD;
   public double* qLDiagInv;
-  public double* qLDiagSqrtInv;
   public double* bvh_aabb_dyn;
   public byte* bvh_active;
   public double* flexedge_velocity;
@@ -4944,6 +4946,7 @@ public unsafe struct mjData_ {
   public int* mapM2C;
   public int* D_rownnz;
   public int* D_rowadr;
+  public int* D_diag;
   public int* D_colind;
   public int* mapM2D;
   public int* mapD2M;
@@ -5238,12 +5241,13 @@ public unsafe struct mjModel_ {
   public int nuser_actuator;
   public int nuser_sensor;
   public int nnames;
-  public int nnames_map;
   public int npaths;
+  public int nnames_map;
   public int nM;
   public int nB;
   public int nC;
   public int nD;
+  public int nJmom;
   public int ntree;
   public int ngravcomp;
   public int nemax;
@@ -5681,7 +5685,7 @@ public unsafe struct mjrContext_ {
   public fixed uint auxColor_r[10];
   public fixed int mat_texid[10000];
   public fixed int mat_texuniform[1000];
-  public fixed int mat_texrepeat[2000];
+  public fixed float mat_texrepeat[2000];
   public int ntexture;
   public fixed int textureType[1000];
   public fixed uint texture[1000];
@@ -6676,7 +6680,7 @@ public static unsafe extern void mj_factorM(mjModel_* m, mjData_* d);
 public static unsafe extern void mj_solveM(mjModel_* m, mjData_* d, double* x, double* y, int n);
 
 [DllImport("mujoco", CallingConvention = CallingConvention.Cdecl)]
-public static unsafe extern void mj_solveM2(mjModel_* m, mjData_* d, double* x, double* y, int n);
+public static unsafe extern void mj_solveM2(mjModel_* m, mjData_* d, double* x, double* y, double* sqrtInvD, int n);
 
 [DllImport("mujoco", CallingConvention = CallingConvention.Cdecl)]
 public static unsafe extern void mj_comVel(mjModel_* m, mjData_* d);
@@ -6938,6 +6942,9 @@ public static unsafe extern void mjv_updateScene(mjModel_* m, mjData_* d, mjvOpt
 
 [DllImport("mujoco", CallingConvention = CallingConvention.Cdecl)]
 public static unsafe extern int mjv_updateSceneFromState(mjvSceneState_* scnstate, mjvOption_* opt, mjvPerturb_* pert, mjvCamera_* cam, int catmask, mjvScene_* scn);
+
+[DllImport("mujoco", CallingConvention = CallingConvention.Cdecl)]
+public static unsafe extern void mjv_copyModel(mjModel_* dest, mjModel_* src);
 
 [DllImport("mujoco", CallingConvention = CallingConvention.Cdecl)]
 public static unsafe extern void mjv_defaultSceneState(mjvSceneState_* scnstate);
@@ -7271,6 +7278,9 @@ public static unsafe extern void mju_quatIntegrate(double* quat, double* vel, do
 
 [DllImport("mujoco", CallingConvention = CallingConvention.Cdecl)]
 public static unsafe extern void mju_quatZ2Vec(double* quat, double* vec);
+
+[DllImport("mujoco", CallingConvention = CallingConvention.Cdecl)]
+public static unsafe extern int mju_mat2Rot(double* quat, double* mat);
 
 [DllImport("mujoco", CallingConvention = CallingConvention.Cdecl)]
 public static unsafe extern void mju_euler2Quat(double* quat, double* euler, [MarshalAs(UnmanagedType.LPStr)]string seq);

@@ -118,6 +118,7 @@ class mjCModel_ : public mjsElement {
   int nB;              // number of non-zeros in sparse body-dof matrix
   int nC;              // number of non-zeros in reduced sparse dof-dof matrix
   int nD;              // number of non-zeros in sparse dof-dof matrix
+  int nJmom;           // number of non-zeros in sparse actuator_moment matrix
 
   // statistics, as computed by mj_setConst
   double meaninertia_auto;  // mean diagonal inertia, as computed by mj_setConst
@@ -220,6 +221,9 @@ class mjCModel : public mjCModel_, private mjSpec {
   // delete object from the corresponding list
   void DeleteElement(mjsElement* el);
 
+  // detach subtree from model
+  void Detach(mjCBody* subtree);
+
   // API for access to model elements (outside tree)
   int NumObjects(mjtObj type);              // number of objects in specified list
   mjCBase* GetObject(mjtObj type, int id);  // pointer to specified object
@@ -235,6 +239,7 @@ class mjCModel : public mjCModel_, private mjSpec {
   mjCBase* FindObject(mjtObj type, std::string name) const;         // find object given type and name
   mjCBase* FindTree(mjCBody* body, mjtObj type, std::string name);  // find tree object given name
   mjSpec* FindSpec(std::string name) const;                         // find spec given name
+  mjSpec* FindSpec(const mjsCompiler* compiler_) const;             // find spec given mjsCompiler
   void ActivatePlugin(const mjpPlugin* plugin, int slot);           // activate plugin
 
   // accessors
@@ -302,9 +307,18 @@ class mjCModel : public mjCModel_, private mjSpec {
   // map from default class name to default class pointer
   std::unordered_map<std::string, mjCDef*> def_map;
 
+  // get the spec from which this model was created
+  mjSpec* GetSourceSpec() const;
+
+  // set deepcopy flag
+  void SetDeepCopy(bool deepcopy) { deepcopy_ = deepcopy; }
+
  private:
   // settings for each defaults class
   std::vector<mjCDef*> defaults_;
+
+  // spec from which this model was created in copy constructor
+  mjSpec* source_spec_;
 
   // list of active plugins
   std::vector<std::pair<const mjpPlugin*, int>> active_plugins_;
@@ -322,6 +336,8 @@ class mjCModel : public mjCModel_, private mjSpec {
   void CopyPaths(mjModel*);             // copy paths, compute path addresses
   void CopyObjects(mjModel*);           // copy objects outside kinematic tree
   void CopyTree(mjModel*);              // copy objects inside kinematic tree
+  void CopyPlugins(mjModel*);           // copy plugin data
+  int CountNJmom(const mjModel* m);     // compute number of non-zeros in actuator_moment matrix
 
   // objects created here
   std::vector<mjCFlex*>     flexes_;      // list of flexes
@@ -341,7 +357,7 @@ class mjCModel : public mjCModel_, private mjSpec {
   std::vector<mjCTuple*>    tuples_;      // list of tuple fields
   std::vector<mjCKey*>      keys_;        // list of keyframe fields
   std::vector<mjCPlugin*>   plugins_;     // list of plugin instances
-  std::vector<mjSpec*>      specs_;       // list of specs
+  std::vector<mjSpec*>      specs_;       // list of attached specs
 
   // pointers to objects created inside kinematic tree
   std::vector<mjCBody*>   bodies_;   // list of bodies
@@ -366,9 +382,11 @@ class mjCModel : public mjCModel_, private mjSpec {
   template <class T> void CopyList(std::vector<T*>& dest,
                                    const std::vector<T*>& sources);
 
+  // copy plugins that are explicitly instantiated by the argument object to this model
+  template <class T> void CopyExplicitPlugin(T* obj);
+
   // copy vector of plugins to this model
-  template <class T> void CopyPlugin(std::vector<mjCPlugin*>& dest,
-                                     const std::vector<mjCPlugin*>& sources,
+  template <class T> void CopyPlugin(const std::vector<mjCPlugin*>& sources,
                                      const std::vector<T*>& list);
 
   // delete from list the elements that cause an error
@@ -398,5 +416,6 @@ class mjCModel : public mjCModel_, private mjSpec {
   mjListKeyMap ids;   // map from object names to ids
   mjCError errInfo;   // last error info
   std::vector<mjKeyInfo> key_pending_;  // attached keyframes
+  bool deepcopy_;     // copy objects when attaching
 };
 #endif  // MUJOCO_SRC_USER_USER_MODEL_H_

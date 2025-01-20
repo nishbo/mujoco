@@ -82,7 +82,7 @@ void mju_factorLUSparse(mjtNum *LU, int n, int* scratch,
 
 // solve mat*res=vec given LU factorization of mat
 void mju_solveLUSparse(mjtNum *res, const mjtNum *LU, const mjtNum* vec, int n,
-                       const int *rownnz, const int *rowadr, const int *colind);
+                       const int *rownnz, const int *rowadr, const int* diag, const int *colind);
 
 // eigenvalue decomposition of symmetric 3x3 matrix
 MJAPI int mju_eig3(mjtNum eigval[3], mjtNum eigvec[9], mjtNum quat[4], const mjtNum mat[9]);
@@ -114,7 +114,7 @@ MJAPI void mju_boxQPmalloc(mjtNum** res, mjtNum** R, int** index,
                            mjtNum** H, mjtNum** g, int n,
                            mjtNum** lower, mjtNum** upper);
 
-// minimize 0.5*x'*H*x + x'*g  s.t. lower <= x <=upper, explicit options (see implemetation)
+// minimize 0.5*x'*H*x + x'*g  s.t. lower <= x <=upper, explicit options (see implementation)
 MJAPI int mju_boxQPoption(mjtNum* res, mjtNum* R, int* index,
                           const mjtNum* H, const mjtNum* g, int n,
                           const mjtNum* lower, const mjtNum* upper,

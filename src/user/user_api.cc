@@ -208,7 +208,7 @@ int mjs_detachBody(mjSpec* s, mjsBody* b) {
     model->SetError(e);
     return -1;
   }
-  delete body;
+  model->Detach(body);
   return 0;
 }
 
@@ -254,10 +254,26 @@ int mjs_activatePlugin(mjSpec* s, const char* name) {
 
 
 
-// delete object, it will call the appropriate destructor since ~mjCBase is virtual
-void mjs_delete(mjsElement* element) {
+// set deep copy flag
+int mjs_setDeepCopy(mjSpec* s, int deepcopy) {
+  mjCModel* model = static_cast<mjCModel*>(s->element);
+  model->SetDeepCopy(deepcopy);
+  return 0;
+}
+
+
+
+// delete object, return 0 if success
+int mjs_delete(mjsElement* element) {
   mjCBase* object = static_cast<mjCBase*>(element);
-  object->model->DeleteElement(element);
+  try {
+    // it will call the appropriate destructor since ~mjCBase is virtual
+    object->model->DeleteElement(element);
+    return 0;
+  } catch (mjCError& e) {
+    object->model->SetError(e);
+    return -1;
+  }
 }
 
 
@@ -614,7 +630,7 @@ mjsBody* mjs_findBody(mjSpec* s, const char* name) {
 // find element in spec by name
 mjsElement* mjs_findElement(mjSpec* s, mjtObj type, const char* name) {
   mjCModel* model = static_cast<mjCModel*>(s->element);
-  if (model->IsCompiled()) {
+  if (model->IsCompiled() && type != mjOBJ_FRAME) {
     return model->FindObject(type, std::string(name));  // fast lookup
   }
   switch (type) {
@@ -638,6 +654,30 @@ mjsBody* mjs_findChild(mjsBody* bodyspec, const char* name) {
   mjCBody* body = static_cast<mjCBody*>(bodyspec->element);
   mjCBase* child = body->FindObject(mjOBJ_BODY, std::string(name));
   return child ? &(static_cast<mjCBody*>(child)->spec) : nullptr;
+}
+
+
+
+// get parent body
+mjsBody* mjs_getParent(mjsElement* element) {
+  switch (element->elemtype) {
+    case mjOBJ_BODY:
+      return &(static_cast<mjCBody*>(element)->GetParent()->spec);
+    case mjOBJ_FRAME:
+      return &(static_cast<mjCFrame*>(element)->GetParent()->spec);
+    case mjOBJ_JOINT:
+      return &(static_cast<mjCJoint*>(element)->GetParent()->spec);
+    case mjOBJ_GEOM:
+      return &(static_cast<mjCGeom*>(element)->GetParent()->spec);
+    case mjOBJ_SITE:
+      return &(static_cast<mjCSite*>(element)->GetParent()->spec);
+    case mjOBJ_CAMERA:
+      return &(static_cast<mjCCamera*>(element)->GetParent()->spec);
+    case mjOBJ_LIGHT:
+      return &(static_cast<mjCLight*>(element)->GetParent()->spec);
+    default:
+      return nullptr;
+  }
 }
 
 
@@ -674,7 +714,7 @@ const char* mjs_resolveOrientation(double quat[4], mjtByte degree, const char* s
 mjsFrame* mjs_bodyToFrame(mjsBody** body) {
   mjCBody* bodyC = static_cast<mjCBody*>((*body)->element);
   mjCFrame* frameC = bodyC->ToFrame();
-  delete bodyC;
+  bodyC->model->Detach(bodyC);
   *body = nullptr;
   return &frameC->spec;
 }

@@ -141,7 +141,9 @@ static void addContactGeom(const mjModel* m, mjData* d, const mjtByte* flags,
       START
       thisgeom->type = mjGEOM_CYLINDER;
       thisgeom->size[0] = thisgeom->size[1] = m->vis.scale.contactwidth * scl;
-      thisgeom->size[2] = m->vis.scale.contactheight * scl;
+      float halfheight = m->vis.scale.contactheight * scl;
+      float halfdepth = -con->dist / 2;
+      thisgeom->size[2] = mjMAX(halfheight, halfdepth);
       mju_n2f(thisgeom->pos, con->pos, 3);
       mju_n2f(thisgeom->mat, mat, 9);
 
@@ -1726,7 +1728,18 @@ void mjv_addGeoms(const mjModel* m, mjData* d, const mjvOption* vopt,
   // spatial tendons
   objtype = mjOBJ_TENDON;
   category = mjCAT_DYNAMIC;
-  if (vopt->flags[mjVIS_TENDON] && (category & catmask)) {
+  if (vopt->flags[mjVIS_TENDON] && (category & catmask) && m->ntendon) {
+    // mark actuated tendons
+    mj_markStack(d);
+    int* tendon_actuated = mjSTACKALLOC(d, m->ntendon, int);
+    mju_zeroInt(tendon_actuated, m->ntendon);
+    for (int i=0; i < m->nu; i++) {
+      if (m->actuator_trntype[i] == mjTRN_TENDON) {
+        tendon_actuated[m->actuator_trnid[2*i]] = 1;
+      }
+    }
+
+    // draw tendons
     for (int i=0; i < m->ntendon; i++) {
       if (vopt->tendongroup[mjMAX(0, mjMIN(mjNGROUP-1, m->tendon_group[i]))]) {
         // tendon has a deadband spring
@@ -1750,9 +1763,10 @@ void mjv_addGeoms(const mjModel* m, mjData* d, const mjvOption* vopt,
           !mjDISABLED(mjDSBL_GRAVITY)           &&    // gravity enabled
           mju_norm3(m->opt.gravity) > mjMINVAL  &&    // gravity strictly nonzero
           m->tendon_num[i] == 2                 &&    // only two sites on the tendon
-          (limitedspring || limitedconstraint)  &&    // either spring or constraint length limits
+          (limitedspring != limitedconstraint)  &&    // either spring or constraint length limits
           m->tendon_damping[i] == 0             &&    // no damping
-          m->tendon_frictionloss[i] == 0;             // no frictionloss
+          m->tendon_frictionloss[i] == 0        &&    // no frictionloss
+          tendon_actuated[i] == 0;                    // no actuator
 
         // conditions not met: draw straight lines
         if (!draw_catenary) {
@@ -1814,8 +1828,7 @@ void mjv_addGeoms(const mjModel* m, mjData* d, const mjvOption* vopt,
           int ncatenary = m->vis.quality.numslices + 1;
 
           // allocate catenary
-          mj_markStack(d);
-          mjtNum* catenary = mj_stackAllocNum(d, 3*ncatenary);
+          mjtNum* catenary = mjSTACKALLOC(d, 3*ncatenary, mjtNum);
 
           // points along catenary path
           int npoints = mjv_catenary(x0, x1, m->opt.gravity, length, catenary, ncatenary);
@@ -1824,7 +1837,7 @@ void mjv_addGeoms(const mjModel* m, mjData* d, const mjvOption* vopt,
           for (int j=0; j < npoints-1; j++) {
             START
 
-              sz[0] = m->tendon_width[i];
+            sz[0] = m->tendon_width[i];
 
             // construct geom
             mjv_connector(thisgeom, mjGEOM_CAPSULE, sz[0], catenary+3*j, catenary+3*j+3);
@@ -1839,10 +1852,10 @@ void mjv_addGeoms(const mjModel* m, mjData* d, const mjvOption* vopt,
 
             FINISH
           }
-          mj_freeStack(d);
         }
       }
     }
+    mj_freeStack(d);
   }
 
   // slider-crank
@@ -2518,7 +2531,7 @@ void mjv_updateActiveFlex(const mjModel* m, mjData* d, mjvScene* scn, const mjvO
     else {
       // allocate and clear vertex normals for smoothing
       mj_markStack(d);
-      mjtNum* vertnorm = mj_stackAllocNum(d, 3*m->flex_vertnum[f]);
+      mjtNum* vertnorm = mjSTACKALLOC(d, 3*m->flex_vertnum[f], mjtNum);
       mju_zero(vertnorm, 3*m->flex_vertnum[f]);
 
       // add vertex normals: top element sides in 2D, shell fragments in 3D

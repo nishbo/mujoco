@@ -748,6 +748,7 @@ void MjDataWrapper::Serialize(std::ostream& output) const {
   X(ne);
   X(nf);
   X(nJ);
+  X(nA);
   X(nefc);
   X(nisland);
   X(time);
@@ -825,6 +826,7 @@ MjDataWrapper MjDataWrapper::Deserialize(std::istream& input) {
   X(ne);
   X(nf);
   X(nJ);
+  X(nA);
   X(nefc);
   X(nisland);
   X(time);
@@ -1716,6 +1718,18 @@ This is useful for example when the MJB is not available as a file on disk.)"));
   MJMODEL_VIEW_GROUPS
 #undef XGROUP
 
+#define XGROUP(spectype, field)                                       \
+  mjModel.def(                                                        \
+      "bind",                                                         \
+      [](MjModelWrapper& m, spectype& spec) -> auto& {                \
+        return m.indexer().field##_by_name(mjs_getString(spec.name)); \
+      },                                                              \
+      py::return_value_policy::reference_internal,                    \
+      py::arg_v("spec", py::none()));
+
+  MJMODEL_BIND_GROUPS
+#undef XGROUP
+
 #define XGROUP(field, altname, FIELD_XMACROS)                                 \
   mjModel.def(                                                                \
       #altname,                                                               \
@@ -2048,6 +2062,18 @@ This is useful for example when the MJB is not available as a file on disk.)"));
       py::return_value_policy::reference_internal, py::arg_v("name", ""));
 
   MJDATA_VIEW_GROUPS
+#undef XGROUP
+
+#define XGROUP(spectype, field)                                       \
+  mjData.def(                                                         \
+      "bind",                                                         \
+      [](MjDataWrapper& d, spectype& spec) -> auto& {                 \
+        return d.indexer().field##_by_name(mjs_getString(spec.name)); \
+      },                                                              \
+      py::return_value_policy::reference_internal,                    \
+      py::arg_v("spec", py::none()));
+
+  MJDATA_BIND_GROUPS
 #undef XGROUP
 
 #define XGROUP(field, altname, FIELD_XMACROS)                                \

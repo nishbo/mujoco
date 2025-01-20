@@ -13,7 +13,8 @@
 # limitations under the License.
 # ==============================================================================
 """Engine support functions."""
-from typing import Optional, Tuple, Union
+from collections.abc import Sequence
+from typing import Optional, Tuple, Union, Any
 
 import jax
 from jax import numpy as jp
@@ -236,7 +237,7 @@ def _getadr(
 def id2name(
     m: Union[Model, mujoco.MjModel], typ: mujoco._enums.mjtObj, i: int
 ) -> Optional[str]:
-  """Gets the name of an object with the specified mjtObj type and id.
+  """Gets the name of an object with the specified mjtObj type and ids.
 
   See mujoco.id2name for more info.
 
@@ -282,6 +283,196 @@ def name2id(
   }
 
   return names_map.get(name, -1)
+
+
+class BindModel(object):
+  """Class holding the requested MJX Model and spec id for binding a spec to Model."""
+
+  def __init__(self, model: Model, specs: Sequence[Any]):
+    self.model = model
+    try:
+      iter(specs)
+    except TypeError:
+      specs = [specs]
+    ids = []
+    for spec in specs:
+      if isinstance(spec, mujoco.MjsBody):
+        self.prefix = 'body_'
+        idx = name2id(model, mujoco.mjtObj.mjOBJ_BODY, spec.name)
+      elif isinstance(spec, mujoco.MjsJoint):
+        self.prefix = 'jnt_'
+        idx = name2id(model, mujoco.mjtObj.mjOBJ_JOINT, spec.name)
+      elif isinstance(spec, mujoco.MjsGeom):
+        self.prefix = 'geom_'
+        idx = name2id(model, mujoco.mjtObj.mjOBJ_GEOM, spec.name)
+      elif isinstance(spec, mujoco.MjsSite):
+        self.prefix = 'site_'
+        idx = name2id(model, mujoco.mjtObj.mjOBJ_SITE, spec.name)
+      elif isinstance(spec, mujoco.MjsLight):
+        self.prefix = 'light_'
+        idx = name2id(model, mujoco.mjtObj.mjOBJ_LIGHT, spec.name)
+      elif isinstance(spec, mujoco.MjsCamera):
+        self.prefix = 'cam_'
+        idx = name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, spec.name)
+      elif isinstance(spec, mujoco.MjsMesh):
+        self.prefix = 'mesh_'
+        idx = name2id(model, mujoco.mjtObj.mjOBJ_MESH, spec.name)
+      elif isinstance(spec, mujoco.MjsHField):
+        self.prefix = 'hfield_'
+        idx = name2id(model, mujoco.mjtObj.mjOBJ_HFIELD, spec.name)
+      elif isinstance(spec, mujoco.MjsPair):
+        self.prefix = 'pair_'
+        idx = name2id(model, mujoco.mjtObj.mjOBJ_PAIR, spec.name)
+      elif isinstance(spec, mujoco.MjsTendon):
+        self.prefix = 'tendon_'
+        idx = name2id(model, mujoco.mjtObj.mjOBJ_TENDON, spec.name)
+      elif isinstance(spec, mujoco.MjsActuator):
+        self.prefix = 'actuator_'
+        idx = name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, spec.name)
+      elif isinstance(spec, mujoco.MjsSensor):
+        self.prefix = 'sensor_'
+        idx = name2id(model, mujoco.mjtObj.mjOBJ_SENSOR, spec.name)
+      elif isinstance(spec, mujoco.MjsNumeric):
+        self.prefix = 'numeric_'
+        idx = name2id(model, mujoco.mjtObj.mjOBJ_NUMERIC, spec.name)
+      elif isinstance(spec, mujoco.MjsText):
+        self.prefix = 'text_'
+        idx = name2id(model, mujoco.mjtObj.mjOBJ_TEXT, spec.name)
+      elif isinstance(spec, mujoco.MjsTuple):
+        self.prefix = 'tuple_'
+        idx = name2id(model, mujoco.mjtObj.mjOBJ_TUPLE, spec.name)
+      elif isinstance(spec, mujoco.MjsKey):
+        self.prefix = 'key_'
+        idx = name2id(model, mujoco.mjtObj.mjOBJ_KEY, spec.name)
+      elif isinstance(spec, mujoco.MjsEquality):
+        self.prefix = 'eq_'
+        idx = name2id(model, mujoco.mjtObj.mjOBJ_EQUALITY, spec.name)
+      elif isinstance(spec, mujoco.MjsExclude):
+        self.prefix = 'exclude_'
+        idx = name2id(model, mujoco.mjtObj.mjOBJ_EXCLUDE, spec.name)
+      elif isinstance(spec, mujoco.MjsSkin):
+        self.prefix = 'skin_'
+        idx = name2id(model, mujoco.mjtObj.mjOBJ_SKIN, spec.name)
+      elif isinstance(spec, mujoco.MjsMaterial):
+        self.prefix = 'material_'
+        idx = name2id(model, mujoco.mjtObj.mjOBJ_MATERIAL, spec.name)
+      else:
+        raise ValueError('invalid spec type')
+      if idx < 0:
+        raise KeyError(f'invalid name: {spec.name}')  # pytype: disable=attribute-error
+      ids.append(idx)
+    if len(ids) == 1:
+      self.id = ids[0]
+    else:
+      self.id = ids
+
+  def __getattr__(self, name: str):
+    return getattr(self.model, self.prefix + name)[self.id, :]
+
+
+def _bind_model(self: Model, obj: Sequence[Any]) -> BindModel:
+  """Bind a Mujoco spec to an MJX Model."""
+  return BindModel(self, obj)
+
+
+class BindData(object):
+  """Class holding the requested MJX Data and spec id for binding a spec to Data."""
+
+  def __init__(self, data: Data, model: Model, specs: Sequence[Any]):
+    self.data = data
+    self.model = model
+    try:
+      iter(specs)
+    except TypeError:
+      specs = [specs]
+    ids = []
+    for spec in specs:
+      if isinstance(spec, mujoco.MjsBody):
+        self.prefix = ''
+        idx = name2id(model, mujoco.mjtObj.mjOBJ_BODY, spec.name)
+      elif isinstance(spec, mujoco.MjsJoint):
+        self.prefix = 'jnt_'
+        idx = name2id(model, mujoco.mjtObj.mjOBJ_JOINT, spec.name)
+      elif isinstance(spec, mujoco.MjsGeom):
+        self.prefix = 'geom_'
+        idx = name2id(model, mujoco.mjtObj.mjOBJ_GEOM, spec.name)
+      elif isinstance(spec, mujoco.MjsSite):
+        self.prefix = 'site_'
+        idx = name2id(model, mujoco.mjtObj.mjOBJ_SITE, spec.name)
+      elif isinstance(spec, mujoco.MjsLight):
+        self.prefix = 'light_'
+        idx = name2id(model, mujoco.mjtObj.mjOBJ_LIGHT, spec.name)
+      elif isinstance(spec, mujoco.MjsCamera):
+        self.prefix = 'cam_'
+        idx = name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, spec.name)
+      elif isinstance(spec, mujoco.MjsTendon):
+        self.prefix = 'ten_'
+        idx = name2id(model, mujoco.mjtObj.mjOBJ_TENDON, spec.name)
+      elif isinstance(spec, mujoco.MjsActuator):
+        self.prefix = 'actuator_'
+        idx = name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, spec.name)
+      elif isinstance(spec, mujoco.MjsSensor):
+        self.prefix = 'sensor_'
+        idx = name2id(model, mujoco.mjtObj.mjOBJ_SENSOR, spec.name)
+      elif isinstance(spec, mujoco.MjsEquality):
+        self.prefix = 'eq_'
+        idx = name2id(model, mujoco.mjtObj.mjOBJ_EQUALITY, spec.name)
+      else:
+        raise ValueError('invalid spec type')
+      if idx < 0:
+        raise KeyError(f'invalid name: {spec.name}')  # pytype: disable=attribute-error
+      ids.append(idx)
+    if len(ids) == 1:
+      self.id = ids[0]
+    else:
+      self.id = ids
+
+  def __getname(self, name: str):
+    if name == 'ctrl':
+      if self.prefix == 'actuator_':
+        return name
+      else:
+        raise AttributeError('ctrl is not available for this type')
+    else:
+      return self.prefix + name
+
+  def __getattr__(self, name: str):
+    if name == 'sensordata':
+      adr = self.model.sensor_adr[self.id]
+      num = self.model.sensor_dim[self.id]
+      if isinstance(self.id, list):
+        idx = []
+        for a, n in zip(adr, num):
+          idx.extend(a + j for j in range(n))
+        return getattr(self.data, name)[idx, ...]
+      else:
+        return getattr(self.data, name)[adr : adr + num, ...]
+    return getattr(self.data, self.__getname(name))[self.id, ...]
+
+  def set(self, name: str, value: jax.Array) -> Data:
+    """Set the value of an array in an MJX Data."""
+    if name == 'sensordata':
+      raise AttributeError('sensordata is readonly')
+    array = getattr(self.data, self.__getname(name))
+    try:
+      iter(value)
+    except TypeError:
+      value = [value]
+    if len(value) == 1:
+      array = array.at[self.id].set(value[0])
+    else:
+      for i, v in enumerate(value):
+        array = array.at[self.id[i]].set(v)
+    return self.data.replace(**{self.__getname(name): array})
+
+
+def _bind_data(self: Data, model: Model, obj: Sequence[Any]) -> BindData:
+  """Bind a Mujoco spec to an MJX Data."""
+  return BindData(self, model, obj)
+
+
+Model.bind = _bind_model
+Data.bind = _bind_data
 
 
 def _decode_pyramid(
@@ -359,7 +550,9 @@ def _length_circle(
   p0n = math.normalize(p0).reshape(-1)
   p1n = math.normalize(p1).reshape(-1)
 
-  angle = jp.arccos(jp.dot(p0n, p1n))
+  # clip input to closed interval for jp.arccos to prevent potential nan
+  # TODO(taylorhowell): add test for case where clip is necessary
+  angle = jp.arccos(jp.clip(jp.dot(p0n, p1n), -1, 1))
 
   # flip if necessary
   cross = p0[1] * p1[0] - p0[0] * p1[1]
@@ -384,7 +577,11 @@ def _is_intersect(
       (p2[0] - p1[0]) * (p1[1] - p3[1]) - (p2[1] - p1[1]) * (p1[0] - p3[0])
   ) / det
 
-  return (a >= 0) & (a <= 1) & (b >= 0) & (b <= 1)
+  return jp.where(
+      jp.abs(det) < mujoco.mjMINVAL,
+      0,
+      (a >= 0) & (a <= 1) & (b >= 0) & (b <= 1),
+  )
 
 
 def wrap_circle(
@@ -397,7 +594,9 @@ def wrap_circle(
   sqrad = rad * rad
   dif = jp.array([d[2] - d[0], d[3] - d[1]])
   dd = dif[0] ** 2 + dif[1] ** 2
-  a = jp.clip(-(dif[0] * d[0] + dif[1] * d[1]) / dd, 0, 1)
+  a = jp.clip(
+      -(dif[0] * d[0] + dif[1] * d[1]) / jp.maximum(mujoco.mjMINVAL, dd), 0, 1
+  )
   seg = jp.array([a * dif[0] + d[0], a * dif[1] + d[1]])
 
   point_inside0 = sqlen0 < sqrad
@@ -411,13 +610,21 @@ def wrap_circle(
 
   # construct the two solutions, compute goodness
   def _sol(sgn):
-    sqrt0 = jp.sqrt(sqlen0 - sqrad)
-    sqrt1 = jp.sqrt(sqlen1 - sqrad)
+    sqrt0 = jp.sqrt(jp.maximum(mujoco.mjMINVAL, sqlen0 - sqrad))
+    sqrt1 = jp.sqrt(jp.maximum(mujoco.mjMINVAL, sqlen1 - sqrad))
 
-    d00 = (d[0] * sqrad + sgn * rad * d[1] * sqrt0) / sqlen0
-    d01 = (d[1] * sqrad - sgn * rad * d[0] * sqrt0) / sqlen0
-    d10 = (d[2] * sqrad - sgn * rad * d[3] * sqrt1) / sqlen1
-    d11 = (d[3] * sqrad + sgn * rad * d[2] * sqrt1) / sqlen1
+    d00 = (d[0] * sqrad + sgn * rad * d[1] * sqrt0) / jp.maximum(
+        mujoco.mjMINVAL, sqlen0
+    )
+    d01 = (d[1] * sqrad - sgn * rad * d[0] * sqrt0) / jp.maximum(
+        mujoco.mjMINVAL, sqlen0
+    )
+    d10 = (d[2] * sqrad - sgn * rad * d[3] * sqrt1) / jp.maximum(
+        mujoco.mjMINVAL, sqlen1
+    )
+    d11 = (d[3] * sqrad + sgn * rad * d[2] * sqrt1) / jp.maximum(
+        mujoco.mjMINVAL, sqlen1
+    )
 
     sol = jp.array([[d00, d01], [d10, d11]])
 
@@ -560,3 +767,152 @@ def wrap(
   wpnt1 = jp.where(invalid, jp.zeros(3), wpnt1)
 
   return wlen, wpnt0, wpnt1
+
+
+def muscle_gain_length(
+    length: jax.Array, lmin: jax.Array, lmax: jax.Array
+) -> jax.Array:
+  """Normalized muscle length-gain curve."""
+  # mid-ranges (maximum is at 1.0)
+  a = 0.5 * (lmin + 1)
+  b = 0.5 * (1 + lmax)
+
+  out0 = 0.5 * jp.square(
+      (length - lmin) / jp.maximum(mujoco.mjMINVAL, a - lmin)
+  )
+  out1 = 1 - 0.5 * jp.square((1 - length) / jp.maximum(mujoco.mjMINVAL, 1 - a))
+  out2 = 1 - 0.5 * jp.square((length - 1) / jp.maximum(mujoco.mjMINVAL, b - 1))
+  out3 = 0.5 * jp.square(
+      (lmax - length) / jp.maximum(mujoco.mjMINVAL, lmax - b)
+  )
+
+  out = jp.where(length <= b, out2, out3)
+  out = jp.where(length <= 1, out1, out)
+  out = jp.where(length <= a, out0, out)
+  out = jp.where((lmin <= length) & (length <= lmax), out, 0.0)
+
+  return out
+
+
+def muscle_gain(
+    length: jax.Array,
+    vel: jax.Array,
+    lengthrange: jax.Array,
+    acc0: jax.Array,
+    prm: jax.Array,
+) -> jax.Array:
+  """Muscle active force."""
+  # unpack parameters
+  lrange = prm[:2]
+  force, scale, lmin, lmax, vmax, _, fvmax = prm[2:9]
+
+  force = jp.where(force < 0, scale / jp.maximum(mujoco.mjMINVAL, acc0), force)
+
+  # optimum length
+  L0 = (lengthrange[1] - lengthrange[0]) / jp.maximum(  # pylint:disable=invalid-name
+      mujoco.mjMINVAL, lrange[1] - lrange[0]
+  )
+
+  # normalized length and velocity
+  L = lrange[0] + (length - lengthrange[0]) / jp.maximum(mujoco.mjMINVAL, L0)  # pylint:disable=invalid-name
+  V = vel / jp.maximum(mujoco.mjMINVAL, L0 * vmax)  # pylint:disable=invalid-name
+
+  # length curve
+  FL = muscle_gain_length(L, lmin, lmax)  # pylint:disable=invalid-name
+
+  # velocity curve
+  y = fvmax - 1
+  FV = jp.where(  # pylint:disable=invalid-name
+      V <= y, fvmax - jp.square(y - V) / jp.maximum(mujoco.mjMINVAL, y), fvmax
+  )
+  FV = jp.where(V <= 0, jp.square(V + 1), FV)  # pylint:disable=invalid-name
+  FV = jp.where(V <= -1, 0, FV)  # pylint:disable=invalid-name
+
+  # compute FVL and scale, make it negative
+  return -force * FL * FV
+
+
+def muscle_bias(
+    length: jax.Array, lengthrange: jax.Array, acc0: jax.Array, prm: jax.Array
+) -> jax.Array:
+  """Muscle passive force."""
+  # unpack parameters
+  lrange = prm[:2]
+  force, scale, _, lmax, _, fpmax = prm[2:8]
+
+  force = jp.where(force < 0, scale / jp.maximum(mujoco.mjMINVAL, acc0), force)
+
+  # optimum length
+  L0 = (lengthrange[1] - lengthrange[0]) / jp.maximum(  # pylint:disable=invalid-name
+      mujoco.mjMINVAL, lrange[1] - lrange[0]
+  )
+
+  # normalized length
+  L = lrange[0] + (length - lengthrange[0]) / jp.maximum(mujoco.mjMINVAL, L0)  # pylint:disable=invalid-name
+
+  # half-quadratic to (L0 + lmax) / 2, linear beyond
+  b = 0.5 * (1 + lmax)
+
+  out1 = (
+      -force
+      * fpmax
+      * 0.5
+      * jp.square((L - 1) / jp.maximum(mujoco.mjMINVAL, b - 1))
+  )
+  out2 = -force * fpmax * (0.5 + (L - b) / jp.maximum(mujoco.mjMINVAL, b - 1))
+
+  out = jp.where(L <= b, out1, out2)
+  out = jp.where(L <= 1, 0.0, out)
+
+  return out
+
+
+def muscle_dynamics_timescale(
+    dctrl: jax.Array,
+    tau_act: jax.Array,
+    tau_deact: jax.Array,
+    smoothing_width: jax.Array,
+) -> jax.Array:
+  """Muscle time constant with optional smoothing."""
+  # hard switching
+  tau_hard = jp.where(dctrl > 0, tau_act, tau_deact)
+
+  def _sigmoid(x):
+    # sigmoid function over 0 <= x <= 1 using quintic polynomial
+    # sigmoid: f(x) = 6 * x^5 - 15 * x^4 + 10 * x^3
+    # solution of f(0) = f'(0) = f''(0) = 0, f(1) = 1, f'(1) = f''(1) = 0
+    sol = x * x * x * (3 * x * (2 * x - 5) + 10)
+    sol = jp.where(x <= 0, 0, sol)
+    sol = jp.where(x >= 1, 1, sol)
+    return sol
+
+  # smooth switching
+  # scale by width, center around 0.5 midpoint, rescale to bounds
+  tau_smooth = tau_deact + (tau_act - tau_deact) * _sigmoid(
+      dctrl / smoothing_width + 0.5
+  )
+
+  return jp.where(smoothing_width < mujoco.mjMINVAL, tau_hard, tau_smooth)
+
+
+def muscle_dynamics(
+    ctrl: jax.Array, act: jax.Array, prm: jax.Array
+) -> jax.Array:
+  """Muscle activation dynamics."""
+  # clamp control
+  ctrlclamp = jp.clip(ctrl, 0, 1)
+
+  # clamp activation
+  actclamp = jp.clip(act, 0, 1)
+
+  # compute timescales as in Millard et at. (2013)
+  # https://doi.org/10.1115/1.4023390
+  tau_act = prm[0] * (0.5 + 1.5 * actclamp)  # activation timescale
+  tau_deact = prm[1] / (0.5 + 1.5 * actclamp)  # deactivation timescale
+  smoothing_width = prm[2]  # width of smoothing sigmoid
+  dctrl = ctrlclamp - act  # excess excitation
+
+  tau = muscle_dynamics_timescale(dctrl, tau_act, tau_deact, smoothing_width)
+
+  # filter output
+  return dctrl / jp.maximum(mujoco.mjMINVAL, tau)
