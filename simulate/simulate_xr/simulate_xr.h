@@ -15,14 +15,7 @@
 #ifndef SIMULATE_XR_H_
 #define SIMULATE_XR_H_
 
-#define GLEW_STATIC
-
-// Windows is needed but without minmax
-#define WIN32_LEAN_AND_MEAN
-#define NOMINMAX
-#include <Windows.h>
-#include <unknwn.h>
-
+// TODO future setup for Android build on devices
 // for proper init of openxr
 #define XR_USE_PLATFORM_WIN32
 #define XR_USE_GRAPHICS_API_OPENGL
@@ -31,7 +24,7 @@
 #include <openxr/openxr.h>
 #include <openxr/openxr_platform.h>
 
-// to link to windows?
+// to link to windows
 #include <mujoco/mujoco.h>
 
 #include <vector>
