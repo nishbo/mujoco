@@ -1033,7 +1033,6 @@ void SimulateXrControllers::poll_actions(XrTime predictedTime,
   }
   XrActionStateGetInfo actionStateGetInfo{XR_TYPE_ACTION_STATE_GET_INFO};
 
-
   // We pose a single Action, twice - once for each subAction Path.
   actionStateGetInfo.action = m_palmPoseAction;
   // For each hand, get the pose state if possible.
@@ -1044,7 +1043,7 @@ void SimulateXrControllers::poll_actions(XrTime predictedTime,
                              &m_handPoseState[i]) < 0) {
       mju_warning("Failed to get Pose State.");
     } else {
-      printf_s("Got Pose State. ");
+      if (verbose > 3) printf_s("Got Pose State. ");
     }
 
     if (m_handPoseState[i].isActive) {
@@ -1067,7 +1066,7 @@ void SimulateXrControllers::poll_actions(XrTime predictedTime,
     actionStateGetInfo.subactionPath = m_handPaths[i];
     if (xrGetActionStateFloat(session, &actionStateGetInfo, &m_grabState[i]) <
         0) {
-       //mju_warning("Failed to get Float State of Grab Cube action.");
+      // mju_warning("Failed to get Float State of Grab Cube action.");
     }
   }
   for (int i = 0; i < 2; i++) {
@@ -1075,7 +1074,7 @@ void SimulateXrControllers::poll_actions(XrTime predictedTime,
     actionStateGetInfo.subactionPath = m_handPaths[i];
     if (xrGetActionStateBoolean(session, &actionStateGetInfo,
                                 &m_changeColorState[i]) < 0) {
-      //mju_warning("Failed to get Boolean State of Change Color action.");
+      // mju_warning("Failed to get Boolean State of Change Color action.");
     }
   }
   // The Spawn Cube action has no subActionPath:
@@ -1084,7 +1083,7 @@ void SimulateXrControllers::poll_actions(XrTime predictedTime,
     actionStateGetInfo.subactionPath = 0;
     if (xrGetActionStateBoolean(session, &actionStateGetInfo,
                                 &m_spawnCubeState) < 0) {
-      //mju_warning("Failed to get Boolean State of Spawn Cube action.");
+      // mju_warning("Failed to get Boolean State of Spawn Cube action.");
     }
   }
   for (int i = 0; i < 2; i++) {
@@ -1100,30 +1099,30 @@ void SimulateXrControllers::poll_actions(XrTime predictedTime,
     hapticActionInfo.subactionPath = m_handPaths[i];
     if (xrApplyHapticFeedback(session, &hapticActionInfo,
                               (XrHapticBaseHeader *)&vibration) < 0) {
-      //mju_warning("Failed to apply haptic feedback.");
+      // mju_warning("Failed to apply haptic feedback.");
     }
   }
 
   // print some stuff
-  if (m_handPoseState[0].isActive == XR_TRUE) {
-    printf_s(" controller 1: %.6f",
-             m_handPose[0].position.x);
-  }
-  if (m_handPoseState[1].isActive == XR_TRUE) {
-    printf_s(" controller 2: %.6f",
-             m_handPose[1].position.x);
-  }
+  if (verbose > 3) {
+    if (m_handPoseState[0].isActive == XR_TRUE) {
+      printf_s(" controller 1: %.6f", m_handPose[0].position.x);
+    }
+    if (m_handPoseState[1].isActive == XR_TRUE) {
+      printf_s(" controller 2: %.6f", m_handPose[1].position.x);
+    }
 
-  if (m_changeColorState[0].isActive == XR_TRUE &&
-      m_changeColorState[0].currentState == XR_FALSE &&
-      m_changeColorState[0].changedSinceLastSync == XR_TRUE)
-    printf_s(" Clicked LEFT.");
-  if (m_changeColorState[1].isActive == XR_TRUE &&
-      m_changeColorState[1].currentState == XR_FALSE &&
-      m_changeColorState[1].changedSinceLastSync == XR_TRUE)
-    printf_s(" Clicked RIGHT.");
+    if (m_changeColorState[0].isActive == XR_TRUE &&
+        m_changeColorState[0].currentState == XR_FALSE &&
+        m_changeColorState[0].changedSinceLastSync == XR_TRUE)
+      printf_s(" Clicked LEFT.");
+    if (m_changeColorState[1].isActive == XR_TRUE &&
+        m_changeColorState[1].currentState == XR_FALSE &&
+        m_changeColorState[1].changedSinceLastSync == XR_TRUE)
+      printf_s(" Clicked RIGHT.");
 
-  printf_s("\n");
+    printf_s("\n");
+  }
 }
 
 void SimulateXrControllers::process_actions() {

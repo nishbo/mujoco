@@ -50,6 +50,12 @@ class SimulateXrControllers {
   SimulateXrControllers();
   ~SimulateXrControllers();
 
+  // 0 no text except warnings and errors
+  // 1 some success messages
+  // 2 more information
+  // 4 frame-by-frame info
+  int verbose = 1;
+
   int init(XrInstance &xrInstance);
 
   int init_session(XrInstance &xrInstance, XrSession &session);
