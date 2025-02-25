@@ -37,6 +37,13 @@
 #include <unordered_map>
 #include <algorithm>
 
+struct SimulateXrController_ {
+  bool is_active = false;
+  float pos[3] = {0};
+  float rot_quat[4] = {0};
+};
+typedef struct SimulateXrController_ SimulateXrController;
+
 
 class SimulateXrControllers {
  public:
@@ -51,6 +58,8 @@ class SimulateXrControllers {
                     XrSpace &localSpace);
   void process_actions();
 
+  int get_controller_position_left(XrPosef &handPose);
+  int get_controller_position_right(XrPosef &handPose);
 
  private:
   XrActionSet m_actionSet;
@@ -108,6 +117,8 @@ class SimulateXrControllers {
 
   int attach_action_set(XrSession &m_session);
 
+  void copy_xr_posef(XrPosef &from, XrPosef &to);
+
 };
 
 
@@ -137,9 +148,13 @@ class SimulateXr {
   void after_render(mjrContext *con, int window_width, int window_height);
 
   bool is_initialized();
+  bool is_controllers_initialized();
+
+  SimulateXrController simxr_controllers[2];
 
  private:
   bool m_initialized = false;
+  bool m_controllers_initialized = false;
 
   const float nearZ = 0.05f;
   const float farZ = 50.0f;  // todo switch to 100?
@@ -269,6 +284,11 @@ class SimulateXr {
   bool rendered = false;
 
   void _blit_to_mujoco(int dst_width, int dst_height);
+
+  void _before_render_controllers();
+
+  void _hand_to_mujoco_controller(XrPosef &m_handPose,
+                                  SimulateXrController &simxr_controllers);
 };
 
 #endif  // SIMULATE_XR_H_

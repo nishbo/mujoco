@@ -53,7 +53,8 @@ void SimulateXr::init() {
 
   if (this->_sim_xr_controllers.init(m_xrInstance) < 0) {
     mju_warning("Failed to initialize XR controllers.");
-    return;
+  } else {
+    m_controllers_initialized = true;
   }
 
   if (_get_view_configuration_views() < 0) {
@@ -156,6 +157,7 @@ bool SimulateXr::before_render(mjvScene *scn, mjModel *m) {
   // Controller binds
   _sim_xr_controllers.poll_actions(frameState.predictedDisplayTime, m_session,
                                    m_localSpace);
+  _before_render_controllers();
 
   // essentially, first part of RenderLayer
 
@@ -225,6 +227,8 @@ bool SimulateXr::before_render(mjvScene *scn, mjModel *m) {
 }
 
 bool SimulateXr::is_initialized() { return m_initialized; }
+
+bool SimulateXr::is_controllers_initialized() { return m_controllers_initialized; }
 
 void SimulateXr::after_render(mjrContext *con, int window_width,
                               int window_height) {
@@ -967,6 +971,28 @@ void SimulateXr::_blit_to_mujoco(int dst_width, int dst_height) {
                     dst_width, dst_height, GL_COLOR_BUFFER_BIT, GL_LINEAR);
 }
 
+void SimulateXr::_before_render_controllers() { 
+  XrPosef handPose;
+  if (_sim_xr_controllers.get_controller_position_left(handPose) == 0) {
+    _hand_to_mujoco_controller(handPose, simxr_controllers[0]);
+  }
+  if (_sim_xr_controllers.get_controller_position_right(handPose) == 0) {
+    _hand_to_mujoco_controller(handPose, simxr_controllers[1]);
+  }
+}
+
+void SimulateXr::_hand_to_mujoco_controller(
+    XrPosef &handPose, SimulateXrController &simxr_controllers) {
+  simxr_controllers.pos[0] = handPose.position.x;
+  simxr_controllers.pos[1] = handPose.position.y;
+  simxr_controllers.pos[2] = handPose.position.z;
+
+  simxr_controllers.rot_quat[0] = handPose.orientation.x;
+  simxr_controllers.rot_quat[1] = handPose.orientation.y;
+  simxr_controllers.rot_quat[2] = handPose.orientation.z;
+  simxr_controllers.rot_quat[3] = handPose.orientation.w;
+}
+
 SimulateXrControllers::SimulateXrControllers() {}
 
 SimulateXrControllers::~SimulateXrControllers() {}
@@ -1019,9 +1045,8 @@ void SimulateXrControllers::poll_actions(XrTime predictedTime,
       mju_warning("Failed to get Pose State.");
     } else {
       printf_s("Got Pose State. ");
-      printf_s("Position controller 1: %.6f, controller 2: %.6f.",
-               m_handPose[0].position.x, m_handPose[1].position.x);
     }
+
     if (m_handPoseState[i].isActive) {
       XrSpaceLocation spaceLocation{XR_TYPE_SPACE_LOCATION};
       XrResult res = xrLocateSpace(m_handPoseSpace[i], localSpace,
@@ -1079,6 +1104,16 @@ void SimulateXrControllers::poll_actions(XrTime predictedTime,
     }
   }
 
+  // print some stuff
+  if (m_handPoseState[0].isActive == XR_TRUE) {
+    printf_s(" controller 1: %.6f",
+             m_handPose[0].position.x);
+  }
+  if (m_handPoseState[1].isActive == XR_TRUE) {
+    printf_s(" controller 2: %.6f",
+             m_handPose[1].position.x);
+  }
+
   if (m_changeColorState[0].isActive == XR_TRUE &&
       m_changeColorState[0].currentState == XR_FALSE &&
       m_changeColorState[0].changedSinceLastSync == XR_TRUE)
@@ -1093,6 +1128,22 @@ void SimulateXrControllers::poll_actions(XrTime predictedTime,
 
 void SimulateXrControllers::process_actions() {
     // not implemented
+}
+
+int SimulateXrControllers::get_controller_position_left(XrPosef &handPose) {
+  if (m_handPoseState[0].isActive) {
+    copy_xr_posef(m_handPose[0], handPose);
+    return 0;
+  }
+  return -1;
+}
+
+int SimulateXrControllers::get_controller_position_right(XrPosef &handPose) {
+  if (m_handPoseState[1].isActive) {
+    copy_xr_posef(m_handPose[1], handPose);
+    return 0;
+  }
+  return -1;
 }
 
 XrPath SimulateXrControllers::CreateXrPath(const char *path_string,
@@ -1280,4 +1331,15 @@ int SimulateXrControllers::attach_action_set(XrSession &m_session) {
     return -1;
   }
   return 0;
+}
+
+void SimulateXrControllers::copy_xr_posef(XrPosef &from, XrPosef &to) {
+  to.position.x = from.position.x;
+  to.position.y = from.position.y;
+  to.position.z = from.position.z;
+
+  to.orientation.w = from.orientation.w;
+  to.orientation.x = from.orientation.x;
+  to.orientation.y = from.orientation.y;
+  to.orientation.z = from.orientation.z;
 }
