@@ -2306,8 +2306,11 @@ void Simulate::LoadOnRenderThread() {
   }
 
 #ifdef mjBUILDSIMULATEXR
-  if (simXr.is_initialized())
+  if (simXr.is_initialized()) {
     simXr.set_scn_params(&this->scn);
+    // add controller objects and rays
+    simXr.add_controller_geoms(&this->scn);
+  }
 #endif // mjBUILDSIMULATEXR
 
   // set window title to model name

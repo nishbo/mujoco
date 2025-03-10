@@ -39,8 +39,14 @@
 
 struct SimulateXrController_ {
   bool is_active = false;
-  float pos[3] = {0};
-  float rot_quat[4] = {0};
+  mjtNum pos[3] = {0};
+  mjtNum rot_quat[4] = {0};
+
+  // set in SimulateXr::init()
+  float rgba[4];  // controller color
+  float rgba_select[4];  // controller select color
+
+  mjvGeom *g = nullptr;
 };
 typedef struct SimulateXrController_ SimulateXrController;
 
@@ -158,12 +164,17 @@ class SimulateXr {
 
   SimulateXrController simxr_controllers[2];
 
+  void add_controller_geoms(mjvScene *scn);
+
  private:
   bool m_initialized = false;
   bool m_controllers_initialized = false;
 
   const float nearZ = 0.05f;
-  const float farZ = 50.0f;  // todo switch to 100?
+  const float farZ = 50.0f;  // 100 is optional
+
+  mjtNum scene_rotate[4];
+  mjtNum scene_translate[3];
 
   std::vector<XrView> m_views;
 
@@ -295,6 +306,11 @@ class SimulateXr {
 
   void _hand_to_mujoco_controller(XrPosef &m_handPose,
                                   SimulateXrController &simxr_controllers);
+
+  void _add_controller_geom(mjvScene *scn, SimulateXrController &ctl);
+
+  void _update_controller_pose(mjvScene *scn, SimulateXrController &ctl);
+  //void _update_controller_poses();
 };
 
 #endif  // SIMULATE_XR_H_

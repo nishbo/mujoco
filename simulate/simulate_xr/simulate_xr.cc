@@ -25,7 +25,55 @@
 #define GLFW_NATIVE_INCLUDE_NONE
 #include <GLFW/glfw3native.h>
 
-SimulateXr::SimulateXr() {}
+
+// res = vec
+void _mju_copy3_f(float res[3], const float data[3]) {
+  res[0] = data[0];
+  res[1] = data[1];
+  res[2] = data[2];
+}
+// res = vec
+void _mju_copy4_f(float res[4], const float data[4]) {
+  res[0] = data[0];
+  res[1] = data[1];
+  res[2] = data[2];
+  res[3] = data[3];
+}
+
+SimulateXr::SimulateXr() {
+  // default controller colors
+  simxr_controllers[0].rgba[0] = 0.8f;
+  simxr_controllers[0].rgba[1] = 0.2f;
+  simxr_controllers[0].rgba[2] = 0.2f;
+  simxr_controllers[0].rgba[3] = 0.6f;
+
+  simxr_controllers[1].rgba[0] = 0.2f;
+  simxr_controllers[1].rgba[1] = 0.8f;
+  simxr_controllers[1].rgba[2] = 0.2f;
+  simxr_controllers[1].rgba[3] = 0.6f;
+
+  // default controller select colors
+  simxr_controllers[0].rgba_select[0] = 0.4f;
+  simxr_controllers[0].rgba_select[1] = 0.1f;
+  simxr_controllers[0].rgba_select[2] = 0.1f;
+  simxr_controllers[0].rgba_select[3] = 0.6f;
+
+  simxr_controllers[1].rgba_select[0] = 0.1f;
+  simxr_controllers[1].rgba_select[1] = 0.4f;
+  simxr_controllers[1].rgba_select[2] = 0.1f;
+  simxr_controllers[1].rgba_select[3] = 0.6f;
+
+  // default scene rotate and translate
+  // TODO load from model files?
+  scene_rotate[0] = cos(0.25 * mjPI);
+  scene_rotate[1] = sin(-0.25 * mjPI);
+  scene_rotate[2] = 0;
+  scene_rotate[3] = 0;
+
+  scene_translate[0] = 0;
+  scene_translate[1] = 0;
+  scene_translate[2] = -1;
+}
 
 SimulateXr::~SimulateXr() {}
 
@@ -155,9 +203,12 @@ bool SimulateXr::before_render(mjvScene *scn, mjModel *m) {
   if (!(sessionActive && frameState.shouldRender)) return false;
 
   // Controller binds
-  _sim_xr_controllers.poll_actions(frameState.predictedDisplayTime, m_session,
-                                   m_localSpace);
-  _before_render_controllers();
+  if (this->is_controllers_initialized()) {
+    _sim_xr_controllers.poll_actions(frameState.predictedDisplayTime, m_session,
+                                     m_localSpace);
+    // pull information
+    _before_render_controllers();
+  }
 
   // essentially, first part of RenderLayer
 
@@ -209,10 +260,14 @@ bool SimulateXr::before_render(mjvScene *scn, mjModel *m) {
   }
 
   scn->enabletransform = true;
-  scn->rotate[0] = cos(0.25 * mjPI);
-  scn->rotate[1] = sin(-0.25 * mjPI);
-  scn->translate[1] = 0;  // TODO AS give user control?
-  scn->translate[2] = -1;
+  mju_n2f(scn->rotate, this->scene_rotate, 4);
+  mju_n2f(scn->translate, this->scene_translate, 3);
+
+  // Controller render
+  if (this->is_controllers_initialized()) {
+    // need to add them every time to render
+    add_controller_geoms(scn);
+  }
 
   // RENDER
   // BeginRendering
@@ -228,7 +283,16 @@ bool SimulateXr::before_render(mjvScene *scn, mjModel *m) {
 
 bool SimulateXr::is_initialized() { return m_initialized; }
 
-bool SimulateXr::is_controllers_initialized() { return m_controllers_initialized; }
+bool SimulateXr::is_controllers_initialized() {
+  return m_controllers_initialized;
+}
+
+void SimulateXr::add_controller_geoms(mjvScene *scn) {
+  if (this->is_controllers_initialized()) {
+    this->_add_controller_geom(scn, simxr_controllers[0]);
+    this->_add_controller_geom(scn, simxr_controllers[1]);
+  }
+}
 
 void SimulateXr::after_render(mjrContext *con, int window_width,
                               int window_height) {
@@ -265,7 +329,7 @@ void SimulateXr::after_render(mjrContext *con, int window_width,
   answ = xrReleaseSwapchainImage(m_colorSwapchainInfo.swapchain, &releaseInfo);
   if (answ < 0) {
     // OpenXR throws one XR_ERROR_CALL_ORDER_INVALID at the end
-    if (answ != -37 || verbose > 2)
+    if (answ != XR_ERROR_CALL_ORDER_INVALID || verbose > 2)
       mju_warning("Failed to release Image back to the Color Swapchain. Code: %d.", answ);
   }
 
@@ -789,8 +853,9 @@ void SimulateXr::_poll_events() {
         XrEventDataInteractionProfileChanged *interactionProfileChanged =
             reinterpret_cast<XrEventDataInteractionProfileChanged *>(
                 &eventData);
-        std::printf("OPENXR: Interaction Profile changed for Session: %lld.\n",
-                    (unsigned __int64)interactionProfileChanged->session);
+        // does not seem useful
+        //std::printf("OPENXR: Interaction Profile changed for Session: %lld.\n",
+        //            (unsigned __int64)interactionProfileChanged->session);
         if (interactionProfileChanged->session != m_session) {
           std::printf(
               "XrEventDataInteractionProfileChanged for unknown Session");
@@ -975,10 +1040,14 @@ void SimulateXr::_before_render_controllers() {
   XrPosef handPose;
   if (_sim_xr_controllers.get_controller_position_left(handPose) == 0) {
     _hand_to_mujoco_controller(handPose, simxr_controllers[0]);
-  }
+    simxr_controllers[0].is_active = true;
+  } else
+    simxr_controllers[0].is_active = false;
   if (_sim_xr_controllers.get_controller_position_right(handPose) == 0) {
     _hand_to_mujoco_controller(handPose, simxr_controllers[1]);
-  }
+    simxr_controllers[1].is_active = true;
+  } else
+    simxr_controllers[1].is_active = false;
 }
 
 void SimulateXr::_hand_to_mujoco_controller(
@@ -987,11 +1056,80 @@ void SimulateXr::_hand_to_mujoco_controller(
   simxr_controllers.pos[1] = handPose.position.y;
   simxr_controllers.pos[2] = handPose.position.z;
 
-  simxr_controllers.rot_quat[0] = handPose.orientation.x;
-  simxr_controllers.rot_quat[1] = handPose.orientation.y;
-  simxr_controllers.rot_quat[2] = handPose.orientation.z;
-  simxr_controllers.rot_quat[3] = handPose.orientation.w;
+  simxr_controllers.rot_quat[0] = handPose.orientation.w;
+  simxr_controllers.rot_quat[1] = handPose.orientation.x;
+  simxr_controllers.rot_quat[2] = handPose.orientation.y;
+  simxr_controllers.rot_quat[3] = handPose.orientation.z;
 }
+
+void SimulateXr::_add_controller_geom(mjvScene *scn,
+                                      SimulateXrController &ctl) {
+  // if (!simxr_controller.is_active) return;
+  if (scn->ngeom >= scn->maxgeom) {
+    mju_warning("Geom buffer not big enough to add controllers.");
+    return;
+  }
+
+  mjvGeom *g = scn->geoms + scn->ngeom;
+
+  // default geom
+  g->type = mjGEOM_BOX;
+  g->dataid = -1;
+  g->objtype = mjOBJ_UNKNOWN;
+  g->objid = -1;
+  g->category = mjCAT_DECOR;
+  //g->texid = -1;
+  //g->texuniform = 0;
+  //g->texrepeat[0] = 1;
+  //g->texrepeat[1] = 1;
+  g->emission = 0;
+  g->specular = 0.5;
+  g->shininess = 0.5;
+  g->reflectance = 0;
+  g->label[0] = 0;
+
+  // size
+  g->size[0] = 0.03f / scn->scale;
+  g->size[1] = 0.02f / scn->scale;
+  g->size[2] = 0.04f / scn->scale;
+
+  // color
+  _mju_copy4_f(g->rgba, ctl.rgba);
+
+  // save
+  ctl.g = g;
+
+  // pose
+  this->_update_controller_pose(scn, ctl);
+
+  // counter
+  scn->ngeom++;
+}
+
+void SimulateXr::_update_controller_pose(mjvScene *scn,
+                                         SimulateXrController &ctl) {
+  // data is in ctl.pos[3] and ctl.rot_quat[4]
+  // needs to be transformed in accordance with the scene
+  mjtNum mjpos[3], mjquat[4];
+  mjv_room2model(mjpos, mjquat, ctl.pos, ctl.rot_quat, scn);
+
+  // position
+  mju_n2f(ctl.g->pos, mjpos, 3);
+
+  // orientation
+  mjtNum mat[9];
+  mju_quat2Mat(mat, mjquat);
+  mju_n2f(ctl.g->mat, mat, 9);
+}
+
+//void SimulateXr::_update_controller_poses() {
+//  if (this->is_controllers_initialized()) {
+//    if (simxr_controllers[0].is_active)
+//      this->_update_controller_pose(simxr_controllers[0]);
+//    if (simxr_controllers[1].is_active)
+//      this->_update_controller_pose(simxr_controllers[1]);
+//  }
+//}
 
 SimulateXrControllers::SimulateXrControllers() {}
 
@@ -1029,7 +1167,7 @@ void SimulateXrControllers::poll_actions(XrTime predictedTime,
   if (xrSyncActions(session, &actionsSyncInfo) < 0) {
     mju_warning("Failed to sync Actions.");
   } else {
-    printf("Got sync Actions.\n");
+    //printf("Got sync Actions.\n");
   }
   XrActionStateGetInfo actionStateGetInfo{XR_TYPE_ACTION_STATE_GET_INFO};
 
