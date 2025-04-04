@@ -294,6 +294,16 @@ void SimulateXr::add_controller_geoms(mjvScene *scn) {
   }
 }
 
+void SimulateXr::perform_controller_actions(mjModel *m, mjData *d,
+                                            const mjvOption *vopt) {
+  if (this->is_controllers_initialized()) {
+    if (simxr_controllers[0].is_active)
+      this->_perform_controller_action(m, d, vopt, simxr_controllers[0]);
+    if (simxr_controllers[1].is_active)
+      this->_perform_controller_action(m, d, vopt, simxr_controllers[1]);
+  }
+}
+
 void SimulateXr::after_render(mjrContext *con, int window_width,
                               int window_height) {
   if (!m_sessionRunning) return;
@@ -1038,11 +1048,13 @@ void SimulateXr::_blit_to_mujoco(int dst_width, int dst_height) {
 
 void SimulateXr::_before_render_controllers() { 
   XrPosef handPose;
+
   if (_sim_xr_controllers.get_controller_position_left(handPose) == 0) {
     _hand_to_mujoco_controller(handPose, simxr_controllers[0]);
     simxr_controllers[0].is_active = true;
   } else
     simxr_controllers[0].is_active = false;
+
   if (_sim_xr_controllers.get_controller_position_right(handPose) == 0) {
     _hand_to_mujoco_controller(handPose, simxr_controllers[1]);
     simxr_controllers[1].is_active = true;
@@ -1150,8 +1162,9 @@ void SimulateXr::_update_controller_pose(mjvScene *scn,
   mju_quat2Mat(mat, mjquat);
   mju_n2f(ctl.g->mat, mat, 9);
 
-  // the ray seems to be aligned naturally with HAND controller
-  // the actual controller is perpendicular
+  // the ray seems to be aligned naturally with index finger of HAND 
+  // the actual controller is perpendicular to the direction (up)
+  // TODO set up direction based on the type of controller.
   const mjtNum axis[4] = {0, 0, 0.7071068, 0.7071068};
   mju_mulQuat(mjquat, ctl.rot_quat, axis);
   mjv_room2model(mjpos, mjquat, ctl.pos, mjquat, scn);
@@ -1160,16 +1173,31 @@ void SimulateXr::_update_controller_pose(mjvScene *scn,
 
   mju_quat2Mat(mat, mjquat);
   mju_n2f(ctl.g2->mat, mat, 9);
+
+  // save the ray direction
+  const mjtNum axis_zero[3] = {0, 0, -1};
+  mju_rotVecQuat(ctl.ray, axis_zero, mjquat);
+  mju_copy3(ctl.ray_pos, mjpos);
 }
 
-//void SimulateXr::_update_controller_poses() {
-//  if (this->is_controllers_initialized()) {
-//    if (simxr_controllers[0].is_active)
-//      this->_update_controller_pose(simxr_controllers[0]);
-//    if (simxr_controllers[1].is_active)
-//      this->_update_controller_pose(simxr_controllers[1]);
-//  }
-//}
+void SimulateXr::_perform_controller_action(mjModel *m, mjData *d,
+                                            const mjvOption *vopt,
+                                            SimulateXrController &ctl) {
+  int geomid[1] = {-1};
+
+  mjtNum geomdist = mj_ray(m, d, ctl.ray_pos, ctl.ray, vopt->geomgroup,
+                           vopt->flags[mjVIS_STATIC], -1, geomid);
+
+  // TODO add skins and flexes? see mjv_select source
+
+  if (geomdist < 0) {
+    return;
+  }
+  //printf("Touching geomid %d.\n", *geomid);
+
+  // get the body
+  ctl.target_body = m->geom_bodyid[*geomid];
+}
 
 SimulateXrControllers::SimulateXrControllers() {}
 

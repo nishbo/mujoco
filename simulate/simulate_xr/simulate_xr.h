@@ -48,6 +48,13 @@ struct SimulateXrController_ {
 
   mjvGeom *g = nullptr;  // box
   mjvGeom *g2 = nullptr;  // arrow
+
+  mjtNum ray[3];
+  mjtNum ray_pos[3];
+
+  int target_body = -1;
+  mjtNum target_pos[3];
+  mjtNum target_quat[3];
 };
 typedef struct SimulateXrController_ SimulateXrController;
 
@@ -166,6 +173,8 @@ class SimulateXr {
   SimulateXrController simxr_controllers[2];
 
   void add_controller_geoms(mjvScene *scn);
+
+  void perform_controller_actions(mjModel *m, mjData *d, const mjvOption *vopt);
 
  private:
   bool m_initialized = false;
@@ -311,7 +320,9 @@ class SimulateXr {
   void _add_controller_geom(mjvScene *scn, SimulateXrController &ctl);
 
   void _update_controller_pose(mjvScene *scn, SimulateXrController &ctl);
-  //void _update_controller_poses();
+
+  void _perform_controller_action(mjModel *m, mjData *d, const mjvOption *vopt,
+                                  SimulateXrController &ctl);
 };
 
 #endif  // SIMULATE_XR_H_
