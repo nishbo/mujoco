@@ -1065,13 +1065,14 @@ void SimulateXr::_hand_to_mujoco_controller(
 void SimulateXr::_add_controller_geom(mjvScene *scn,
                                       SimulateXrController &ctl) {
   // if (!simxr_controller.is_active) return;
-  if (scn->ngeom >= scn->maxgeom) {
+  if (scn->ngeom + 1 >= scn->maxgeom) {
     mju_warning("Geom buffer not big enough to add controllers.");
     return;
   }
 
   mjvGeom *g = scn->geoms + scn->ngeom;
 
+  // Add BOX
   // default geom
   g->type = mjGEOM_BOX;
   g->dataid = -1;
@@ -1089,8 +1090,8 @@ void SimulateXr::_add_controller_geom(mjvScene *scn,
   g->label[0] = 0;
 
   // size
-  g->size[0] = 0.03f / scn->scale;
-  g->size[1] = 0.02f / scn->scale;
+  g->size[0] = 0.02f / scn->scale;
+  g->size[1] = 0.03f / scn->scale;
   g->size[2] = 0.04f / scn->scale;
 
   // color
@@ -1099,11 +1100,39 @@ void SimulateXr::_add_controller_geom(mjvScene *scn,
   // save
   ctl.g = g;
 
-  // pose
-  this->_update_controller_pose(scn, ctl);
+  // counter
+  scn->ngeom++;
+
+  // Add Line
+  g++;
+  // default geom
+  g->type = mjGEOM_LINE;
+  g->dataid = -1;
+  g->objtype = mjOBJ_UNKNOWN;
+  g->objid = -1;
+  g->category = mjCAT_DECOR;
+  g->emission = 0;
+  g->specular = 0.5;
+  g->shininess = 0.5;
+  g->reflectance = 0;
+  g->label[0] = 0;
+
+  // size
+  g->size[0] = 3;  // linewidth
+  g->size[1] = 0;  // nothing?
+  g->size[2] = -10;  // line length
+
+  // color
+  _mju_copy4_f(g->rgba, ctl.rgba);
+
+  // save
+  ctl.g2 = g;
 
   // counter
   scn->ngeom++;
+
+  // Update all geoms pose
+  this->_update_controller_pose(scn, ctl);
 }
 
 void SimulateXr::_update_controller_pose(mjvScene *scn,
@@ -1120,6 +1149,17 @@ void SimulateXr::_update_controller_pose(mjvScene *scn,
   mjtNum mat[9];
   mju_quat2Mat(mat, mjquat);
   mju_n2f(ctl.g->mat, mat, 9);
+
+  // the ray seems to be aligned naturally with HAND controller
+  // the actual controller is perpendicular
+  const mjtNum axis[4] = {0, 0, 0.7071068, 0.7071068};
+  mju_mulQuat(mjquat, ctl.rot_quat, axis);
+  mjv_room2model(mjpos, mjquat, ctl.pos, mjquat, scn);
+
+  mju_n2f(ctl.g2->pos, mjpos, 3);
+
+  mju_quat2Mat(mat, mjquat);
+  mju_n2f(ctl.g2->mat, mat, 9);
 }
 
 //void SimulateXr::_update_controller_poses() {

@@ -46,7 +46,8 @@ struct SimulateXrController_ {
   float rgba[4];  // controller color
   float rgba_select[4];  // controller select color
 
-  mjvGeom *g = nullptr;
+  mjvGeom *g = nullptr;  // box
+  mjvGeom *g2 = nullptr;  // arrow
 };
 typedef struct SimulateXrController_ SimulateXrController;
 
