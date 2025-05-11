@@ -32,6 +32,7 @@ void _mju_copy3_f(float res[3], const float data[3]) {
   res[1] = data[1];
   res[2] = data[2];
 }
+
 // res = vec
 void _mju_copy4_f(float res[4], const float data[4]) {
   res[0] = data[0];
@@ -297,10 +298,22 @@ void SimulateXr::add_controller_geoms(mjvScene *scn) {
 void SimulateXr::perform_controller_actions(mjModel *m, mjData *d,
                                             const mjvOption *vopt) {
   if (this->is_controllers_initialized()) {
-    if (simxr_controllers[0].is_active)
-      this->_perform_controller_action(m, d, vopt, simxr_controllers[0]);
-    if (simxr_controllers[1].is_active)
-      this->_perform_controller_action(m, d, vopt, simxr_controllers[1]);
+    for (int i_controller = 0; i_controller < 2; i_controller++) {
+      if (simxr_controllers[i_controller].is_active)
+        this->_perform_controller_action(m, d, vopt,
+                                         simxr_controllers[i_controller]);
+    }
+  }
+}
+
+void SimulateXr::enact_controller_effects(mjModel *m, mjData *d,
+                                          mjvPerturb &pert) {
+  if (this->is_controllers_initialized()) {
+    mju_zero(d->xfrc_applied, 6 * m->nbody);
+    for (int i_controller = 0; i_controller < 2; i_controller++) {
+      if (simxr_controllers[i_controller].is_active)
+        this->_enact_controller_effects(m, d, pert, simxr_controllers[i_controller]);
+    }
   }
 }
 
@@ -1052,12 +1065,18 @@ void SimulateXr::_before_render_controllers() {
   if (_sim_xr_controllers.get_controller_position_left(handPose) == 0) {
     _hand_to_mujoco_controller(handPose, simxr_controllers[0]);
     simxr_controllers[0].is_active = true;
+    // check button presses/actions
+    simxr_controllers[0].grab =
+        _sim_xr_controllers.is_left_controller_grabbing();
   } else
     simxr_controllers[0].is_active = false;
 
   if (_sim_xr_controllers.get_controller_position_right(handPose) == 0) {
     _hand_to_mujoco_controller(handPose, simxr_controllers[1]);
     simxr_controllers[1].is_active = true;
+    // check button presses/actions
+    simxr_controllers[1].grab =
+        _sim_xr_controllers.is_right_controller_grabbing();
   } else
     simxr_controllers[1].is_active = false;
 }
@@ -1132,7 +1151,7 @@ void SimulateXr::_add_controller_geom(mjvScene *scn,
   // size
   g->size[0] = 3;  // linewidth
   g->size[1] = 0;  // nothing?
-  g->size[2] = -10;  // line length
+  g->size[2] = -10 / scn->scale;  // line length
 
   // color
   _mju_copy4_f(g->rgba, ctl.rgba);
@@ -1183,368 +1202,62 @@ void SimulateXr::_update_controller_pose(mjvScene *scn,
 void SimulateXr::_perform_controller_action(mjModel *m, mjData *d,
                                             const mjvOption *vopt,
                                             SimulateXrController &ctl) {
-  int geomid[1] = {-1};
+  // if the controller is grabbing, record it target body and its relative position
+  if (ctl.grab) {
+    // if no object was selected before, find it and record relative position
+    if (ctl.target_body < 0) {
+      int geomid[1] = {-1};
 
-  mjtNum geomdist = mj_ray(m, d, ctl.ray_pos, ctl.ray, vopt->geomgroup,
-                           vopt->flags[mjVIS_STATIC], -1, geomid);
+      mjtNum geomdist = mj_ray(m, d, ctl.ray_pos, ctl.ray, vopt->geomgroup,
+                               vopt->flags[mjVIS_STATIC], -1, geomid);
 
-  // TODO add skins and flexes? see mjv_select source
+      // TODO add skins and flexes? see mjv_select source
 
-  if (geomdist < 0) {
-    return;
-  }
-  //printf("Touching geomid %d.\n", *geomid);
-
-  // get the body
-  ctl.target_body = m->geom_bodyid[*geomid];
-}
-
-SimulateXrControllers::SimulateXrControllers() {}
-
-SimulateXrControllers::~SimulateXrControllers() {}
-
-int SimulateXrControllers::init(XrInstance &xrInstance) {
-  if (create_action_set(xrInstance))
-      return -1;
-  if(suggest_bindings(xrInstance))
-      return -2;
-  return 0;
-}
-
-int SimulateXrControllers::init_session(XrInstance &xrInstance,
-                                        XrSession &session) {
-  if (create_action_poses(xrInstance, session) < 0) return -1;
-
-  if (attach_action_set(session) < 0) return -2;
-
-  return 0;
-}
-
-void SimulateXrControllers::poll_actions(XrTime predictedTime,
-                                         XrSession &session,
-                                         XrSpace &localSpace) {
-  // Update our action set with up-to-date input data.
-  // First, we specify the actionSet we are polling.
-  XrActiveActionSet activeActionSet{};
-  activeActionSet.actionSet = m_actionSet;
-  activeActionSet.subactionPath = XR_NULL_PATH;
-  // Now we sync the Actions to make sure they have current data.
-  XrActionsSyncInfo actionsSyncInfo{XR_TYPE_ACTIONS_SYNC_INFO};
-  actionsSyncInfo.countActiveActionSets = 1;
-  actionsSyncInfo.activeActionSets = &activeActionSet;
-  if (xrSyncActions(session, &actionsSyncInfo) < 0) {
-    mju_warning("Failed to sync Actions.");
-  } else {
-    //printf("Got sync Actions.\n");
-  }
-  XrActionStateGetInfo actionStateGetInfo{XR_TYPE_ACTION_STATE_GET_INFO};
-
-  // We pose a single Action, twice - once for each subAction Path.
-  actionStateGetInfo.action = m_palmPoseAction;
-  // For each hand, get the pose state if possible.
-  for (int i = 0; i < 2; i++) {
-    // Specify the subAction Path.
-    actionStateGetInfo.subactionPath = m_handPaths[i];
-    if (xrGetActionStatePose(session, &actionStateGetInfo,
-                             &m_handPoseState[i]) < 0) {
-      mju_warning("Failed to get Pose State.");
-    } else {
-      if (verbose > 3) printf_s("Got Pose State. ");
-    }
-
-    if (m_handPoseState[i].isActive) {
-      XrSpaceLocation spaceLocation{XR_TYPE_SPACE_LOCATION};
-      XrResult res = xrLocateSpace(m_handPoseSpace[i], localSpace,
-                                   predictedTime, &spaceLocation);
-      if (XR_UNQUALIFIED_SUCCESS(res) &&
-          (spaceLocation.locationFlags &
-           XR_SPACE_LOCATION_POSITION_VALID_BIT) != 0 &&
-          (spaceLocation.locationFlags &
-           XR_SPACE_LOCATION_ORIENTATION_VALID_BIT) != 0) {
-        m_handPose[i] = spaceLocation.pose;
-      } else {
-        m_handPoseState[i].isActive = false;
+      if (geomdist < 0) {
+        return;
       }
+      // printf("Touching geomid %d.\n", *geomid);
+
+      // get the body
+      ctl.target_body = m->geom_bodyid[*geomid];
+
+      // save the relative pose
+      mjtNum negp[3], negq[4], xiquat[4];
+      mju_mulQuat(xiquat, d->xquat + 4 * ctl.target_body,
+                  m->body_iquat + 4 * ctl.target_body);
+      mju_negPose(negp, negq, ctl.pos, ctl.rot_quat);
+      mju_mulPose(ctl.target_rel_pos, ctl.target_rel_quat, negp, negq,
+                  d->xipos + 3 * ctl.target_body, xiquat);
+
+      // color controller
+      _mju_copy4_f(ctl.g->rgba, ctl.rgba_select);
+    } else {
+      // calculate the resultant target pose depending on controller pose
+      mju_mulPose(ctl.target_pos, ctl.target_quat, ctl.pos, ctl.rot_quat,
+                  ctl.target_rel_pos, ctl.target_rel_quat);
+
+      // color controller
+      _mju_copy4_f(ctl.g->rgba, ctl.rgba_select);
     }
-  }
-  for (int i = 0; i < 2; i++) {
-    actionStateGetInfo.action = m_grabCubeAction;
-    actionStateGetInfo.subactionPath = m_handPaths[i];
-    if (xrGetActionStateFloat(session, &actionStateGetInfo, &m_grabState[i]) <
-        0) {
-      // mju_warning("Failed to get Float State of Grab Cube action.");
-    }
-  }
-  for (int i = 0; i < 2; i++) {
-    actionStateGetInfo.action = m_changeColorAction;
-    actionStateGetInfo.subactionPath = m_handPaths[i];
-    if (xrGetActionStateBoolean(session, &actionStateGetInfo,
-                                &m_changeColorState[i]) < 0) {
-      // mju_warning("Failed to get Boolean State of Change Color action.");
-    }
-  }
-  // The Spawn Cube action has no subActionPath:
-  {
-    actionStateGetInfo.action = m_spawnCubeAction;
-    actionStateGetInfo.subactionPath = 0;
-    if (xrGetActionStateBoolean(session, &actionStateGetInfo,
-                                &m_spawnCubeState) < 0) {
-      // mju_warning("Failed to get Boolean State of Spawn Cube action.");
-    }
-  }
-  for (int i = 0; i < 2; i++) {
-    m_buzz[i] *= 0.5f;
-    if (m_buzz[i] < 0.01f) m_buzz[i] = 0.0f;
-    XrHapticVibration vibration{XR_TYPE_HAPTIC_VIBRATION};
-    vibration.amplitude = m_buzz[i];
-    vibration.duration = XR_MIN_HAPTIC_DURATION;
-    vibration.frequency = XR_FREQUENCY_UNSPECIFIED;
-
-    XrHapticActionInfo hapticActionInfo{XR_TYPE_HAPTIC_ACTION_INFO};
-    hapticActionInfo.action = m_buzzAction;
-    hapticActionInfo.subactionPath = m_handPaths[i];
-    if (xrApplyHapticFeedback(session, &hapticActionInfo,
-                              (XrHapticBaseHeader *)&vibration) < 0) {
-      // mju_warning("Failed to apply haptic feedback.");
-    }
-  }
-
-  // print some stuff
-  if (verbose > 3) {
-    if (m_handPoseState[0].isActive == XR_TRUE) {
-      printf_s(" controller 1: %.6f", m_handPose[0].position.x);
-    }
-    if (m_handPoseState[1].isActive == XR_TRUE) {
-      printf_s(" controller 2: %.6f", m_handPose[1].position.x);
-    }
-
-    if (m_changeColorState[0].isActive == XR_TRUE &&
-        m_changeColorState[0].currentState == XR_FALSE &&
-        m_changeColorState[0].changedSinceLastSync == XR_TRUE)
-      printf_s(" Clicked LEFT.");
-    if (m_changeColorState[1].isActive == XR_TRUE &&
-        m_changeColorState[1].currentState == XR_FALSE &&
-        m_changeColorState[1].changedSinceLastSync == XR_TRUE)
-      printf_s(" Clicked RIGHT.");
-
-    printf_s("\n");
+  } else {
+    // deselect
+    ctl.target_body = -1;
+    _mju_copy4_f(ctl.g->rgba, ctl.rgba);
   }
 }
 
-void SimulateXrControllers::process_actions() {
-    // not implemented
-}
+void SimulateXr::_enact_controller_effects(mjModel *m, mjData *d,
+                                           mjvPerturb &pert,
+                                           SimulateXrController &ctl) {
+  if (ctl.grab && ctl.target_body > 0) {
+    // perpare mjvPerturb object
+    pert.active = mjPERT_TRANSLATE | mjPERT_ROTATE;
+    pert.select = ctl.target_body;
+    mju_copy3(pert.refpos, ctl.target_pos);
+    mju_copy(pert.refquat, ctl.target_quat, 4);
 
-int SimulateXrControllers::get_controller_position_left(XrPosef &handPose) {
-  if (m_handPoseState[0].isActive) {
-    copy_xr_posef(m_handPose[0], handPose);
-    return 0;
+    // apply
+    mjv_applyPerturbPose(m, d, &pert, 0);
+    mjv_applyPerturbForce(m, d, &pert);
   }
-  return -1;
-}
-
-int SimulateXrControllers::get_controller_position_right(XrPosef &handPose) {
-  if (m_handPoseState[1].isActive) {
-    copy_xr_posef(m_handPose[1], handPose);
-    return 0;
-  }
-  return -1;
-}
-
-XrPath SimulateXrControllers::CreateXrPath(const char *path_string,
-                                           XrInstance &xrInstance) {
-  XrPath xrPath;
-  if (xrStringToPath(xrInstance, path_string, &xrPath) < 0) {
-    mju_warning("Failed to create XrPath from string: ", path_string, ".");
-  }
-  return xrPath;
-}
-
-void SimulateXrControllers::create_action(
-    XrAction &xrAction, const char *name, XrActionType xrActionType,
-    XrInstance &xrInstance, std::vector<const char *> subaction_paths) {
-  XrActionCreateInfo actionCI{XR_TYPE_ACTION_CREATE_INFO};
-  // The type of action: float input, pose, haptic output etc.
-  actionCI.actionType = xrActionType;
-  // Subaction paths, e.g. left and right hand. To distinguish the same action
-  // performed on different devices.
-  std::vector<XrPath> subaction_xrpaths;
-  for (auto p : subaction_paths) {
-    subaction_xrpaths.push_back(CreateXrPath(p, xrInstance));
-  }
-  actionCI.countSubactionPaths = (uint32_t)subaction_xrpaths.size();
-  actionCI.subactionPaths = subaction_xrpaths.data();
-  // The internal name the runtime uses for this Action.
-  strncpy(actionCI.actionName, name, XR_MAX_ACTION_NAME_SIZE);
-  // Localized names are required so there is a human-readable action name to
-  // show the user if they are rebinding the Action in an options screen.
-  strncpy(actionCI.localizedActionName, name,
-          XR_MAX_LOCALIZED_ACTION_NAME_SIZE);
-  if(xrCreateAction(m_actionSet, &actionCI, &xrAction)<0)
-    mju_warning("Failed to create Action.");
-}
-
-int SimulateXrControllers::create_action_set(XrInstance &xrInstance) {
-  XrActionSetCreateInfo actionSetCI{XR_TYPE_ACTION_SET_CREATE_INFO};
-  // The internal name the runtime uses for this Action Set.
-  strncpy(actionSetCI.actionSetName, "pulling-actionset",
-          XR_MAX_ACTION_SET_NAME_SIZE);
-  // Localized names are required so there is a human-readable action name to
-  // show the user if they are rebinding Actions in an options screen.
-  strncpy(actionSetCI.localizedActionSetName, "Pulling ActionSet",
-          XR_MAX_LOCALIZED_ACTION_SET_NAME_SIZE);
-  // Set a priority: this comes into play when we have multiple Action Sets, and
-  // determines which Action takes priority in binding to a specific input.
-  actionSetCI.priority = 0;
-
-  if (xrCreateActionSet(xrInstance, &actionSetCI, &m_actionSet) < 0) {
-    mju_warning("ERROR: Failed to create ActionSet.");
-    return -1;
-  }
-
-  // An Action for grabbing cubes.
-  create_action(m_grabCubeAction, "grab-cube", XR_ACTION_TYPE_FLOAT_INPUT,
-               xrInstance,
-               {"/user/hand/left", "/user/hand/right"});
-  create_action(m_spawnCubeAction, "spawn-cube", XR_ACTION_TYPE_BOOLEAN_INPUT,
-               xrInstance);
-  create_action(m_changeColorAction, "change-color",
-               XR_ACTION_TYPE_BOOLEAN_INPUT, xrInstance,
-               {"/user/hand/left", "/user/hand/right"});
-  // An Action for the position of the palm of the user's hand - appropriate for
-  // the location of a grabbing Actions.
-  create_action(m_palmPoseAction, "palm-pose", XR_ACTION_TYPE_POSE_INPUT,
-               xrInstance,
-               {"/user/hand/left", "/user/hand/right"});
-  // An Action for a vibration output on one or other hand.
-  create_action(m_buzzAction, "buzz", XR_ACTION_TYPE_VIBRATION_OUTPUT,
-               xrInstance,
-               {"/user/hand/left", "/user/hand/right"});
-  // For later convenience we create the XrPaths for the subaction path names.
-  m_handPaths[0] = CreateXrPath("/user/hand/left", xrInstance);
-  m_handPaths[1] = CreateXrPath("/user/hand/right", xrInstance);
-
-  return 0;
-}
-
-bool SimulateXrControllers::suggest_single_binding(
-    const char *profile_path, std::vector<XrActionSuggestedBinding> bindings,
-    XrInstance &xrInstance) {
-  // The application can call xrSuggestInteractionProfileBindings once per
-  // interaction profile that it supports.
-  XrInteractionProfileSuggestedBinding interactionProfileSuggestedBinding{
-      XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING};
-  interactionProfileSuggestedBinding.interactionProfile =
-      CreateXrPath(profile_path, xrInstance);
-  interactionProfileSuggestedBinding.suggestedBindings = bindings.data();
-  interactionProfileSuggestedBinding.countSuggestedBindings =
-      (uint32_t)bindings.size();
-  if (xrSuggestInteractionProfileBindings(
-          xrInstance, &interactionProfileSuggestedBinding) ==
-      XrResult::XR_SUCCESS)
-    return true;
-  mju_warning("Failed to suggest bindings with ", profile_path, ".");
-  return false;
-}
-
-int SimulateXrControllers::suggest_bindings(XrInstance &xrInstance) {
-  bool any_ok = false;
-  // Each Action here has two paths, one for each SubAction path.
-  any_ok |= suggest_single_binding(
-      "/interaction_profiles/khr/simple_controller",
-      {{m_changeColorAction,
-        CreateXrPath("/user/hand/left/input/select/click", xrInstance)},
-       {m_grabCubeAction,
-        CreateXrPath("/user/hand/right/input/select/click", xrInstance)},
-       {m_spawnCubeAction,
-        CreateXrPath("/user/hand/right/input/menu/click", xrInstance)},
-       {m_palmPoseAction,
-        CreateXrPath("/user/hand/left/input/grip/pose", xrInstance)},
-       {m_palmPoseAction,
-        CreateXrPath("/user/hand/right/input/grip/pose", xrInstance)},
-       {m_buzzAction,
-        CreateXrPath("/user/hand/left/output/haptic", xrInstance)},
-       {m_buzzAction,
-        CreateXrPath("/user/hand/right/output/haptic", xrInstance)}},
-      xrInstance);
-  // Each Action here has two paths, one for each SubAction path.
-  any_ok |= suggest_single_binding(
-      "/interaction_profiles/oculus/touch_controller",
-      {{m_grabCubeAction,
-        CreateXrPath("/user/hand/left/input/squeeze/value", xrInstance)},
-       {m_grabCubeAction,
-        CreateXrPath("/user/hand/right/input/squeeze/value", xrInstance)},
-       {m_spawnCubeAction,
-        CreateXrPath("/user/hand/right/input/a/click", xrInstance)},
-       {m_changeColorAction,
-        CreateXrPath("/user/hand/left/input/trigger/value", xrInstance)},
-       {m_changeColorAction,
-        CreateXrPath("/user/hand/right/input/trigger/value", xrInstance)},
-       {m_palmPoseAction,
-        CreateXrPath("/user/hand/left/input/grip/pose", xrInstance)},
-       {m_palmPoseAction,
-        CreateXrPath("/user/hand/right/input/grip/pose", xrInstance)},
-       {m_buzzAction,
-        CreateXrPath("/user/hand/left/output/haptic", xrInstance)},
-       {m_buzzAction,
-        CreateXrPath("/user/hand/right/output/haptic", xrInstance)}},
-      xrInstance);
-  if (!any_ok) {
-    mju_warning("ERROR: Could not select binding.");
-    return -1;
-  }
-
-  return 0;
-}
-
-XrSpace SimulateXrControllers::create_action_pose_space(
-    XrSession session, XrAction xrAction,
-    XrInstance &xrInstance, const char *subaction_path) {
-  // Create an xrSpace for a pose action.
-  XrSpace xrSpace;
-  const XrPosef xrPoseIdentity = {{0.0f, 0.0f, 0.0f, 1.0f}, {0.0f, 0.0f, 0.0f}};
-  // Create frame of reference for a pose action
-  XrActionSpaceCreateInfo actionSpaceCI{XR_TYPE_ACTION_SPACE_CREATE_INFO};
-  actionSpaceCI.action = xrAction;
-  actionSpaceCI.poseInActionSpace = xrPoseIdentity;
-  if (subaction_path)
-    actionSpaceCI.subactionPath = CreateXrPath(subaction_path, xrInstance);
-  if(xrCreateActionSpace(session, &actionSpaceCI, &xrSpace) < 0)
-    mju_warning("Failed to create ActionSpace.");
-  return xrSpace;
-}
-
-int SimulateXrControllers::create_action_poses(
-    XrInstance &xrInstance, XrSession &m_session) {
-  m_handPoseSpace[0] = create_action_pose_space(m_session, m_palmPoseAction,
-                                                xrInstance, "/user/hand/left");
-  m_handPoseSpace[1] = create_action_pose_space(m_session, m_palmPoseAction,
-                                                xrInstance, "/user/hand/right");
-
-  return 0;
-}
-
-int SimulateXrControllers::attach_action_set(XrSession &m_session) {
-  // Attach the action set we just made to the session. We could attach multiple
-  // action sets!
-  XrSessionActionSetsAttachInfo actionSetAttachInfo{
-      XR_TYPE_SESSION_ACTION_SETS_ATTACH_INFO};
-  actionSetAttachInfo.countActionSets = 1;
-  actionSetAttachInfo.actionSets = &m_actionSet;
-  if (xrAttachSessionActionSets(m_session, &actionSetAttachInfo) < 0) {
-    mju_warning("Failed to attach ActionSet to Session.");
-    return -1;
-  }
-  return 0;
-}
-
-void SimulateXrControllers::copy_xr_posef(XrPosef &from, XrPosef &to) {
-  to.position.x = from.position.x;
-  to.position.y = from.position.y;
-  to.position.z = from.position.z;
-
-  to.orientation.w = from.orientation.w;
-  to.orientation.x = from.orientation.x;
-  to.orientation.y = from.orientation.y;
-  to.orientation.z = from.orientation.z;
 }

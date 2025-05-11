@@ -393,6 +393,9 @@ void PhysicsLoop(mj::Simulate& sim) {
                 measured = true;
               }
 
+              // xr controller effects
+              sim.simxr_controller_effects();
+
               // inject noise
               sim.InjectNoise();
 

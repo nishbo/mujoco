@@ -256,6 +256,7 @@ class Simulate {
 #ifdef mjBUILDSIMULATEXR
   SimulateXr simXr;
 #endif // mjBUILDSIMULATEXR
+  void simxr_controller_effects();
 
   // additional user-defined visualization geoms (used in passive mode)
   mjvScene* user_scn = nullptr;

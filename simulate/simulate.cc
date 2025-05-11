@@ -2827,6 +2827,14 @@ void Simulate::InjectNoise() {
   }
 }
 
+void Simulate::simxr_controller_effects() {
+#ifdef mjBUILDSIMULATEXR
+  if (simXr.is_initialized()) {
+    simXr.enact_controller_effects(this->m_, this->d_, this->pert);
+  }
+#endif  // mjBUILDSIMULATEXR
+}
+
 void Simulate::UpdateHField(int hfieldid) {
   MutexLock lock(this->mtx);
   if (!m_ || hfieldid < 0 || hfieldid >= m_->nhfield) {

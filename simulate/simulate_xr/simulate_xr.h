@@ -15,131 +15,38 @@
 #ifndef SIMULATE_XR_H_
 #define SIMULATE_XR_H_
 
-// Windows is needed but without minmax
-#define WIN32_LEAN_AND_MEAN
-#define NOMINMAX
-#include <Windows.h>
-#include <unknwn.h>
-
-// TODO future setup for Android build on devices
-// for proper init of openxr
-#define XR_USE_PLATFORM_WIN32
-#define XR_USE_GRAPHICS_API_OPENGL
-
-// openxr with render by opengl
-#include <openxr/openxr.h>
-#include <openxr/openxr_platform.h>
-
-// to link to windows
-#include <mujoco/mujoco.h>
+#include "simulate_xr_controllers.h"
 
 #include <vector>
 #include <unordered_map>
 #include <algorithm>
 
+
+// user-friendly struct with extracted information from XR
 struct SimulateXrController_ {
   bool is_active = false;
   mjtNum pos[3] = {0};
   mjtNum rot_quat[4] = {0};
 
+  bool grab = false;
+
   // set in SimulateXr::init()
-  float rgba[4];  // controller color
+  float rgba[4];         // controller color
   float rgba_select[4];  // controller select color
 
-  mjvGeom *g = nullptr;  // box
+  mjvGeom *g = nullptr;   // box
   mjvGeom *g2 = nullptr;  // arrow
 
   mjtNum ray[3];
   mjtNum ray_pos[3];
 
   int target_body = -1;
-  mjtNum target_pos[3];
-  mjtNum target_quat[3];
+  mjtNum target_rel_pos[3] = {0};
+  mjtNum target_rel_quat[4] = {0};
+  mjtNum target_pos[3] = {0};
+  mjtNum target_quat[4] = {0};
 };
 typedef struct SimulateXrController_ SimulateXrController;
-
-
-class SimulateXrControllers {
- public:
-  SimulateXrControllers();
-  ~SimulateXrControllers();
-
-  // 0 no text except warnings and errors
-  // 1 some success messages
-  // 2 more information
-  // 4 frame-by-frame info
-  int verbose = 1;
-
-  int init(XrInstance &xrInstance);
-
-  int init_session(XrInstance &xrInstance, XrSession &session);
-
-  void poll_actions(XrTime predictedTime, XrSession &session,
-                    XrSpace &localSpace);
-  void process_actions();
-
-  int get_controller_position_left(XrPosef &handPose);
-  int get_controller_position_right(XrPosef &handPose);
-
- private:
-  XrActionSet m_actionSet;
-  // An action for grabbing blocks, and an action to change the color of a
-  // block.
-  XrAction m_grabCubeAction, m_spawnCubeAction, m_changeColorAction;
-  // The realtime states of these actions.
-  XrActionStateFloat m_grabState[2] = {{XR_TYPE_ACTION_STATE_FLOAT},
-                                       {XR_TYPE_ACTION_STATE_FLOAT}};
-  XrActionStateBoolean m_changeColorState[2] = {{XR_TYPE_ACTION_STATE_BOOLEAN},
-                                                {XR_TYPE_ACTION_STATE_BOOLEAN}};
-  XrActionStateBoolean m_spawnCubeState = {XR_TYPE_ACTION_STATE_BOOLEAN};
-  // The haptic output action for grabbing cubes.
-  XrAction m_buzzAction;
-  // The current haptic output value for each controller.
-  float m_buzz[2] = {0, 0};
-  // The action for getting the hand or controller position and orientation.
-  XrAction m_palmPoseAction;
-  // The XrPaths for left and right hand hands or controllers.
-  XrPath m_handPaths[2] = {0, 0};
-  // The spaces that represents the two hand poses.
-  XrSpace m_handPoseSpace[2];
-  XrActionStatePose m_handPoseState[2] = {{XR_TYPE_ACTION_STATE_POSE},
-                                          {XR_TYPE_ACTION_STATE_POSE}};
-  // In STAGE space, viewHeightM should be 0. In LOCAL space, it should be
-  // offset downwards, below the viewer's initial position.
-  float m_viewHeightM = 1.5f;
-  // The current poses obtained from the XrSpaces.
-  XrPosef m_handPose[2] = {
-      {{1.0f, 0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, -m_viewHeightM}},
-      {{1.0f, 0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, -m_viewHeightM}}};
-
-  XrPath CreateXrPath(const char *path_string, XrInstance &xrInstance);
-
-  //// Init 1
-  // used to be lambda
-  void create_action(XrAction &xrAction, const char *name,
-                    XrActionType xrActionType, XrInstance &xrInstance,
-                    std::vector<const char *> subaction_paths = {});
-  int create_action_set(XrInstance &xrInstance);
-
-  // used to be lambda
-  bool suggest_single_binding(
-      const char *profile_path,
-      std::vector<XrActionSuggestedBinding> bindings, 
-      XrInstance &xrInstance);
-  int suggest_bindings(XrInstance &xrInstance);
-
-  //// Init 2 session
-  // used to be lambda
-  XrSpace create_action_pose_space(XrSession session, XrAction xrAction,
-                                   XrInstance &xrInstance,
-                                   const char *subaction_path = nullptr);
-  int create_action_poses(XrInstance &xrInstance, XrSession &m_session);
-
-  int attach_action_set(XrSession &m_session);
-
-  void copy_xr_posef(XrPosef &from, XrPosef &to);
-
-};
 
 
 class SimulateXr {
@@ -170,11 +77,16 @@ class SimulateXr {
   bool is_initialized();
   bool is_controllers_initialized();
 
+  // user-friendly struct with extracted information from XR
   SimulateXrController simxr_controllers[2];
 
   void add_controller_geoms(mjvScene *scn);
 
+  // within rendering
   void perform_controller_actions(mjModel *m, mjData *d, const mjvOption *vopt);
+
+  // within physical sim
+  void enact_controller_effects(mjModel *m, mjData *d, mjvPerturb &pert);
 
  private:
   bool m_initialized = false;
@@ -323,6 +235,9 @@ class SimulateXr {
 
   void _perform_controller_action(mjModel *m, mjData *d, const mjvOption *vopt,
                                   SimulateXrController &ctl);
+
+  void _enact_controller_effects(mjModel *m, mjData *d, mjvPerturb &pert,
+                                 SimulateXrController &ctl);
 };
 
 #endif  // SIMULATE_XR_H_

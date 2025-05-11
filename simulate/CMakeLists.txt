@@ -163,8 +163,11 @@ target_link_options(libsimulate PRIVATE ${MUJOCO_SIMULATE_LINK_OPTIONS})
 
 if(SIMULATE_BUILD_XR)
   set(SIMULATE_OPENXR_HEADERS
+      simulate_xr/simulate_xr_imports.h
+      simulate_xr/simulate_xr_controllers.h
       simulate_xr/simulate_xr.h)
   set(SIMULATE_OPENXR_SOURCES
+      simulate_xr/simulate_xr_controllers.cc
       simulate_xr/simulate_xr.cc)
   set(SIMULATE_OPENXR_GLAD
       simulate_xr/glad/glad.h simulate_xr/glad/glad.c)
