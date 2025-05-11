@@ -193,15 +193,40 @@ void mju_mulMatTVecSparse(mjtNum* res, const mjtNum* mat, const mjtNum* vec, int
 
 
 
-// res = res*scl1 + vec*scl2
-static void mju_addToSclScl(mjtNum* res, const mjtNum* vec, mjtNum scl1, mjtNum scl2, int n) {
-#ifdef mjUSEAVX
-  mju_addToSclScl_avx(res, vec, scl1, scl2, n);
-#else
+// multiply symmetric matrix (only lower triangle represented) by vector:
+//  res = (mat + strict_upper(mat')) * vec
+void mju_mulSymVecSparse(mjtNum* restrict res, const mjtNum* restrict mat,
+                         const mjtNum* restrict vec, int n,
+                         const int* restrict rownnz, const int* restrict rowadr,
+                         const int* restrict diagnum, const int* restrict colind) {
+  // clear res
+  mju_zero(res, n);
+
+  // multiply
   for (int i=0; i < n; i++) {
-    res[i] = res[i]*scl1 + vec[i]*scl2;
+    int adr = rowadr[i];
+    int diag = rownnz[i] - 1;
+    const mjtNum* row = mat + adr;
+
+    // diagonal
+    res[i] = row[diag] * vec[i];
+
+    // TODO: consider using SIMD if diagnum[i] >= 4
+
+    // shortcut for diagonal row/column
+    if (diagnum[i]) {
+      continue;
+    }
+
+    // off-diagonals
+    const int* ind = colind + adr;
+    for (int k=0; k < diag; k++) {
+      int j = ind[k];
+      mjtNum val = row[k];
+      res[i] += val * vec[j]; // strict lower
+      res[j] += val * vec[i]; // strict upper
+    }
   }
-#endif  // mjUSEAVX
 }
 
 
@@ -233,72 +258,9 @@ int mju_combineSparseCount(int a_nnz, int b_nnz, const int* a_ind, const int* b_
 
 
 
-// combine two sparse vectors: dst = a*dst + b*src, return nnz of result
-int mju_combineSparse(mjtNum* dst, const mjtNum* src, mjtNum a, mjtNum b,
-                      int dst_nnz, int src_nnz, int* dst_ind, const int* src_ind,
-                      mjtNum* buf, int* buf_ind) {
-  // check for identical pattern
-  if (dst_nnz == src_nnz) {
-    if (mju_compare(dst_ind, src_ind, dst_nnz)) {
-      // combine mjtNum data directly
-      mju_addToSclScl(dst, src, a, b, dst_nnz);
-      return dst_nnz;
-    }
-  }
-
-  // copy dst into buf
-  if (dst_nnz) {
-    mju_copy(buf, dst, dst_nnz);
-    mju_copyInt(buf_ind, dst_ind, dst_nnz);
-  }
-
-  // prepare to merge buf and src into dst
-  int bi = 0, si = 0, nnz = 0;
-  int buf_nnz = dst_nnz;
-
-  // merge vectors
-  while (bi < buf_nnz && si < src_nnz) {
-    int badr = buf_ind[bi];
-    int sadr = src_ind[si];
-
-    if (badr == sadr) {
-      dst[nnz] = a*buf[bi++] + b*src[si++];
-      dst_ind[nnz++] = badr;
-    }
-
-    // buf only
-    else if (badr < sadr) {
-      dst[nnz] = a*buf[bi++];
-      dst_ind[nnz++] = badr;
-    }
-
-    // src only
-    else {
-      dst[nnz] = b*src[si++];
-      dst_ind[nnz++] = sadr;
-    }
-  }
-
-  // the rest of src only
-  while (si < src_nnz) {
-    dst[nnz] = b*src[si];
-    dst_ind[nnz++] = src_ind[si++];
-  }
-
-  // the rest of buf only
-  while (bi < buf_nnz) {
-    dst[nnz] = a*buf[bi];
-    dst_ind[nnz++] = buf_ind[bi++];
-  }
-
-  return nnz;
-}
-
-
-
 // incomplete combine sparse: dst = a*dst + b*src at common indices
 void mju_combineSparseInc(mjtNum* dst, const mjtNum* src, int n, mjtNum a, mjtNum b,
-                          int dst_nnz, int src_nnz, int* dst_ind, const int* src_ind) {
+                          int dst_nnz, int src_nnz, const int* dst_ind, const int* src_ind) {
   // check for identical pattern
   if (dst_nnz == src_nnz) {
     if (mju_compare(dst_ind, src_ind, dst_nnz)) {
@@ -514,22 +476,34 @@ int mju_addChains(int* res, int n, int NV1, int NV2,
 
 
 
-// compress layout of sparse matrix
-void mju_compressSparse(mjtNum* mat, int nr, int nc, int* rownnz, int* rowadr, int* colind) {
-  rowadr[0] = 0;
-  int adr = rownnz[0];
-  for (int r=1; r < nr; r++) {
+// compress sparse matrix, remove elements with abs(value) <= minval, return total non-zeros
+int mju_compressSparse(mjtNum* mat, int nr, int nc, int* rownnz, int* rowadr, int* colind,
+                       mjtNum minval) {
+  int remove_small = minval >= 0;
+  int adr = 0;
+  for (int r=0; r < nr; r++) {
     // save old rowadr, record new
-    int rowadr1 = rowadr[r];
+    int rowadr_old = rowadr[r];
     rowadr[r] = adr;
 
-    // shift mat and mat_colind
-    for (int adr1=rowadr1; adr1 < rowadr1+rownnz[r]; adr1++) {
-      mat[adr] = mat[adr1];
-      colind[adr] = colind[adr1];
+    // shift mat and colind
+    int nnz = 0;
+    int end = rowadr_old + rownnz[r];
+    for (int adr_old=rowadr_old; adr_old < end; adr_old++) {
+      if (remove_small && mju_abs(mat[adr_old]) <= minval) {
+        continue;
+      }
+      if (adr != adr_old) {
+        mat[adr] = mat[adr_old];
+        colind[adr] = colind[adr_old];
+      }
       adr++;
+      if (remove_small) nnz++;
     }
+    if (remove_small) rownnz[r] = nnz;
   }
+
+  return rowadr[nr-1] + rownnz[nr-1];
 }
 
 
@@ -860,54 +834,102 @@ void mju_sqrMatTDSparse(mjtNum* res, const mjtNum* mat, const mjtNum* matT,
   mj_freeStack(d);
 }
 
-// precount row non-zeros of reverse-Cholesky factor L, return total non-zeros
-//  based on ldl_symbolic from 'Algorithm 8xx: a concise sparse Cholesky factorization package'
-//  reads pattern from upper triangle
-int mju_cholFactorCount(int* L_rownnz, const int* rownnz, const int* rowadr, const int* colind,
-                        int n, mjData* d) {
-  mj_markStack(d);
-  int* parent = mjSTACKALLOC(d, n, int);
-  int* flag = mjSTACKALLOC(d, n, int);
 
-  // loop over rows in reverse order
-  for (int r = n - 1; r >= 0; r--) {
-    parent[r] = -1;
-    flag[r] = r;
-    L_rownnz[r] = 1;  // start with 1 for diagonal
 
-    // loop over non-zero columns of upper triangle
-    int start = rowadr[r];
-    int end = start + rownnz[r];
-    for (int c = start; c < end; c++) {
-      int i = colind[c];
-
-      // skip lower triangle
-      if (i <= r) {
-        continue;
-      }
-
-      // traverse from i to ancestor, stop when row is flagged
-      while (flag[i] != r) {
-        // if not yet set, set parent to current row
-        if (parent[i] == -1) {
-          parent[i] = r;
-        }
-
-        // increment non-zeros, flag row i, advance to parent
-        L_rownnz[i]++;
-        flag[i] = r;
-        i = parent[i];
+// block-diagonalize a dense matrix
+//   res         output matrix
+//   mat         input matrix
+//   nc_mat      number of columns in mat
+//   nc_res      number of columns in res
+//   nb          number of blocks
+//   perm_r      reverse permutation of rows (res -> mat)
+//   perm_c      reverse permutation of columns (res -> mat)
+//   block_nr    number of rows in each block
+//   block_nc    number of columns in each block
+//   block_r     first row of each block
+//   block_c     first column of each block
+void mju_blockDiag(mjtNum* restrict res, const mjtNum* restrict mat,
+                   int nc_mat, int nc_res, int nb,
+                   const int* restrict perm_r, const int* restrict perm_c,
+                   const int* restrict block_nr, const int* restrict block_nc,
+                   const int* restrict block_r, const int* restrict block_c) {
+  for (int b=0; b < nb; b++) {
+    int bnr = block_nr[b];
+    int bnc = block_nc[b];
+    const int* adr_r = perm_r + block_r[b];
+    const int* adr_c = perm_c + block_c[b];
+    int adr = nc_res * block_r[b];
+    for (int r = 0; r < bnr; r++) {
+      for (int c = 0; c < bnc; c++) {
+        res[adr++] = mat[nc_mat * adr_r[r] + adr_c[c]];
       }
     }
   }
-
-  mj_freeStack(d);
-
-  // sum up all row non-zeros
-  int nnz = 0;
-  for (int r = 0; r < n; r++) {
-    nnz += L_rownnz[r];
-  }
-
-  return nnz;
 }
+
+
+// block-diagonalize a sparse matrix
+//   res         values of the target matrix res
+//   res_rownnz  number of non-zeros in each row of res
+//   res_rowadr  row address of each non-zero in res
+//   res_colind  column index of each non-zero in res
+//   mat         values of the source matrix mat
+//   mat_rownnz  number of non-zeros in each row of mat
+//   mat_rowadr  row address of each non-zero in mat
+//   mat_colind  column index of each non-zero in mat
+//   nr          number of rows in mat/res
+//   nb          number of blocks
+//   perm_r      reverse permutation of rows (res -> mat)
+//   perm_c      forward permutation of columns (mat -> res)
+//   block_r     first row of each block in res
+//   block_c     first column of each block in res
+//   mat2        optional additional source matrix (same structure as mat)
+//   res2        optional additional target matrix (same structure as res)
+void mju_blockDiagSparse(mjtNum* restrict res, int* restrict res_rownnz,
+                         int* restrict res_rowadr, int* restrict res_colind,
+                         const mjtNum* restrict mat, const int* restrict rownnz,
+                         const int* restrict rowadr, const int* restrict colind,
+                         int nr, int nb,
+                         const int* restrict perm_r, const int* restrict perm_c,
+                         const int* restrict block_r, const int* restrict block_c,
+                         mjtNum* restrict res2, const mjtNum* restrict mat2) {
+  int block = 0;
+  int col_offset = block_c[block];
+  int row_next = block + 1 < nb ? block_r[block + 1] : nr;
+  for (int r=0; r < nr; r++) {
+    // row k in mat goes to row r in res
+    int k = perm_r[r];
+
+    // rownnz
+    int nnz = rownnz[k];
+    res_rownnz[r] = nnz;
+
+    // rowadr
+    int res_adr = (r == 0) ? 0 : res_rowadr[r-1] + res_rownnz[r-1];
+    res_rowadr[r] = res_adr;
+
+    // colind
+    int* res_colind_r = res_colind + res_adr;
+    mjtNum* res_r = res + res_adr;
+    int mat_adr = rowadr[k];
+    const int* colind_k = colind + mat_adr;
+    const mjtNum* mat_k = mat + mat_adr;
+    for (int j=0; j < nnz; j++) {
+      res_colind_r[j] = perm_c[colind_k[j]] - col_offset;
+    }
+
+    // values (dense copy: partial order within block is guaranteed)
+    mju_copy(res_r, mat_k, nnz);
+    if (mat2 && res2) {
+      mju_copy(res2 + res_adr, mat2 + mat_adr, nnz);
+    }
+
+    // end of block reached: update block counter, column offset, next row
+    if (r + 1 >= row_next && block + 1 < nb ) {
+      block++;
+      col_offset = block_c[block];
+      row_next = block + 1 < nb ? block_r[block + 1] : nr;
+    }
+  }
+}
+

@@ -53,6 +53,11 @@ MJAPI mjtNum mju_muscleDynamics(mjtNum ctrl, mjtNum act, const mjtNum prm[3]);
 // all 3 semi-axes of a geom
 MJAPI void mju_geomSemiAxes(const mjModel* m, int geom_id, mjtNum semiaxes[3]);
 
+// ----------------------------- Flex interpolation ------------------------------------------------
+
+// evaluate the deformation gradient at p using the nodal dof values
+MJAPI void mju_defGradient(mjtNum res[9], const mjtNum p[3], const mjtNum* dof, int order);
+
 // ----------------------------- Base64 -----------------------------------------------------------
 
 // encode data as Base64 into buf (including padding and null char)
@@ -150,6 +155,18 @@ MJAPI void mju_d2n(mjtNum* res, const double* vec, int n);
 
 // convert from mjtNum to double
 MJAPI void mju_n2d(double* res, const mjtNum* vec, int n);
+
+// gather mjtNums
+MJAPI void mju_gather(mjtNum* res, const mjtNum* vec, const int* ind, int n);
+
+// scatter mjtNums
+MJAPI void mju_scatter(mjtNum* res, const mjtNum* vec, const int* ind, int n);
+
+// gather integers
+MJAPI void mju_gatherInt(int* res, const int* vec, const int* ind, int n);
+
+// scatter integers
+MJAPI void mju_scatterInt(int* res, const int* vec, const int* ind, int n);
 
 // insertion sort, increasing order
 MJAPI void mju_insertionSort(mjtNum* list, int n);

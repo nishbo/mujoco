@@ -19,6 +19,7 @@
 #include <mujoco/mjdata.h>
 #include <mujoco/mujoco.h>
 #include "src/engine/engine_core_smooth.h"
+#include "src/engine/engine_util_misc.h"
 #include "test/fixture.h"
 
 namespace mujoco {
@@ -50,21 +51,19 @@ static void BM_solveLD(benchmark::State& state, bool featherstone, bool coil) {
     vec[i] = 0.2 + 0.3*i;
   }
 
-  // make CSR matrix
-  mjtNum* LDs = mj_stackAllocNum(d, m->nC);
-  for (int i=0; i < m->nC; i++) {
-    LDs[i] = d->qLD[d->mapM2C[i]];
-  }
+  // scatter into legacy matrix
+  mjtNum* LDlegacy = mj_stackAllocNum(d, m->nM);
+  mju_scatter(LDlegacy, d->qLD, d->mapM2M, m->nM);
 
   // benchmark
   while (state.KeepRunningBatch(kNumBenchmarkSteps)) {
     for (int i=0; i < kNumBenchmarkSteps; i++) {
+      mju_copy(res, vec, m->nv);
       if (featherstone) {
-        mj_solveM(m, d, res, vec, 1);
+        mj_solveLD_legacy(m, res, 1, LDlegacy, d->qLDiagInv);
       } else {
-        mju_copy(res, vec, m->nv);
-        mj_solveLDs(res, LDs, d->qLDiagInv, m->nv, 1,
-                    d->C_rownnz, d->C_rowadr, m->dof_simplenum, d->C_colind);
+        mj_solveLD(res, d->qLD, d->qLDiagInv, m->nv, 1,
+                   d->M_rownnz, d->M_rowadr, m->dof_simplenum, d->M_colind);
       }
     }
   }

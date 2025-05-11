@@ -107,12 +107,12 @@ static mjtNum wrap_circle(mjtNum pnt[4], const mjtNum end[4], const mjtNum* side
     return -1;
   }
 
+  mjtNum sqrt0 = mju_sqrt(sqlen0 - sqrad);
+  mjtNum sqrt1 = mju_sqrt(sqlen1 - sqrad);
+
   // construct the two solutions, compute goodness
   mjtNum sol[2][2][2], good[2];
   for (int i=0; i < 2; i++) {
-    mjtNum sqrt0 = mju_sqrt(sqlen0 - sqrad);
-    mjtNum sqrt1 = mju_sqrt(sqlen1 - sqrad);
-
     int sgn = (i == 0 ? 1 : -1);
 
     sol[i][0][0] = (end[0]*sqrad + sgn*radius*end[1]*sqrt0)/sqlen0;
@@ -447,6 +447,51 @@ void mju_geomSemiAxes(const mjModel* m, int geom_id, mjtNum semiaxes[3]) {
     semiaxes[0] = size[0];
     semiaxes[1] = size[1];
     semiaxes[2] = size[2];
+  }
+}
+
+
+
+// ----------------------------- Flex interpolation ------------------------------------------------
+
+mjtNum static inline phi(mjtNum s, int i) {
+  if (i == 0) {
+    return 1-s;
+  } else {
+    return s;
+  }
+}
+
+mjtNum static inline dphi(mjtNum s, int i) {
+  if (i == 0) {
+    return -1;
+  } else {
+    return 1;
+  }
+}
+
+// evaluate the deformation gradient at p using the nodal dof values
+void mju_defGradient(mjtNum res[9], const mjtNum p[3], const mjtNum* dof, int order) {
+  mjtNum gradient[3];
+  mju_zero(res, 9);
+  for (int i = 0; i <= order; i++) {
+    for (int j = 0; j <= order; j++) {
+      for (int k = 0; k <= order; k++) {
+        int idx = 4*i + 2*j + k;
+        gradient[0] = dphi(p[0], i) *  phi(p[1], j) *  phi(p[2], k);
+        gradient[1] =  phi(p[0], i) * dphi(p[1], j) *  phi(p[2], k);
+        gradient[2] =  phi(p[0], i) *  phi(p[1], j) * dphi(p[2], k);
+        res[0] += dof[3*idx+0] * gradient[0];
+        res[1] += dof[3*idx+0] * gradient[1];
+        res[2] += dof[3*idx+0] * gradient[2];
+        res[3] += dof[3*idx+1] * gradient[0];
+        res[4] += dof[3*idx+1] * gradient[1];
+        res[5] += dof[3*idx+1] * gradient[2];
+        res[6] += dof[3*idx+2] * gradient[0];
+        res[7] += dof[3*idx+2] * gradient[1];
+        res[8] += dof[3*idx+2] * gradient[2];
+      }
+    }
   }
 }
 
@@ -1340,6 +1385,42 @@ void mju_d2n(mjtNum* res, const double* vec, int n) {
 void mju_n2d(double* res, const mjtNum* vec, int n) {
   for (int i=0; i < n; i++) {
     res[i] = (double) vec[i];
+  }
+}
+
+
+
+// gather
+void mju_gather(mjtNum* restrict res, const mjtNum* restrict vec, const int* restrict ind, int n) {
+  for (int i=0; i < n; i++) {
+    res[i] = vec[ind[i]];
+  }
+}
+
+
+
+// scatter
+void mju_scatter(mjtNum* restrict res, const mjtNum* restrict vec, const int* restrict ind, int n) {
+  for (int i=0; i < n; i++) {
+    res[ind[i]] = vec[i];
+  }
+}
+
+
+
+// gather integers
+void mju_gatherInt(int* restrict res, const int* restrict vec, const int* restrict ind, int n) {
+  for (int i=0; i < n; i++) {
+    res[i] = vec[ind[i]];
+  }
+}
+
+
+
+// scatter integers
+void mju_scatterInt(int* restrict res, const int* restrict vec, const int* restrict ind, int n) {
+  for (int i=0; i < n; i++) {
+    res[ind[i]] = vec[i];
   }
 }
 

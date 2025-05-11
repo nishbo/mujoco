@@ -75,8 +75,12 @@ instances will be deleted; as in :ref:`mj_compile`, the compilation error can be
 
 .. mujoco-include:: mj_saveLastXML
 
-Update XML data structures with info from low-level model, save as MJCF.
+Update XML data structures with info from low-level model created with :ref:`mj_loadXML`, save as MJCF.
 If error is not NULL, it must have size error_sz.
+
+Note that this function only saves models that have been loaded with :ref:`mj_loadXML`, the legacy loading mechanism.
+See the :ref:`model editing<meOverview>` chapter to understand the difference between the old and new model loading and
+saving mechanisms.
 
 .. _mj_freeLastXML:
 
@@ -95,7 +99,7 @@ Free last XML model if loaded. Called internally at each load.
 .. mujoco-include:: mj_saveXMLString
 
 Save spec to XML string, return 0 on success, -1 on failure. If the length of the output buffer is too small, returns
-the required size. XML saving requires that the spec first be compiled.
+the required size. XML saving automatically compiles the spec before saving.
 
 .. _mj_saveXML:
 
@@ -423,7 +427,8 @@ Get name of object with the specified mjtObj type and id, returns NULL if name n
 
 .. mujoco-include:: mj_fullM
 
-Convert sparse inertia matrix M into full (i.e. dense) matrix.
+Convert sparse inertia matrix ``M`` into full (i.e. dense) matrix.
+|br| ``dst`` must be of size ``nv x nv``, ``M`` must be of the same size as ``mjData.qM``.
 
 .. _mj_mulM:
 
@@ -498,16 +503,11 @@ Returns the smallest signed distance between two geoms and optionally the segmen
 Returned distances are bounded from above by ``distmax``. |br| If no collision of distance smaller than ``distmax`` is
 found, the function will return ``distmax`` and ``fromto``, if given, will be set to (0, 0, 0, 0, 0, 0).
 
-.. admonition:: Positive ``distmax`` values
-   :class: note
+   .. admonition:: different (correct) behavior under `nativeccd`
+      :class: note
 
-   .. TODO: b/339596989 - Improve mjc_Convex.
-
-   For some colliders, a large, positive ``distmax`` will result in an accurate measurement. However, for collision
-   pairs which use the general ``mjc_Convex`` collider, the result will be approximate and likely innacurate.
-   This is considered a bug to be fixed in a future release.
-   In order to determine whether a geom pair uses ``mjc_Convex``, inspect the table at the top of
-   `engine_collision_driver.c <https://github.com/google-deepmind/mujoco/blob/main/src/engine/engine_collision_driver.c>`__.
+      As explained in :ref:`Collision Detection<coDistance>`, distances are inaccurate when using the
+      :ref:`legacy CCD pipeline<coCCD>`, and its use is discouraged.
 
 .. _mj_contactForce:
 
@@ -3572,8 +3572,8 @@ Construct quaternion performing rotation from z-axis to given vector.
 
 .. mujoco-include:: mju_mat2Rot
 
-extract 3D rotation from an arbitrary 3x3 matrix by refining the input quaternion
-returns the number of iterations required to converge
+Extract 3D rotation from an arbitrary 3x3 matrix by refining the input quaternion.
+Returns the number of iterations required to converge
 
 .. _mju_euler2Quat:
 
@@ -3808,32 +3808,14 @@ Free all pointers with ``mju_free()``.
 
 Attachment
 ^^^^^^^^^^
-.. _mjs_attachBody:
+.. _mjs_attach:
 
-`mjs_attachBody <#mjs_attachBody>`__
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+`mjs_attach <#mjs_attach>`__
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-.. mujoco-include:: mjs_attachBody
+.. mujoco-include:: mjs_attach
 
-Attach child body to a parent frame, return the attached body if success or NULL otherwise.
-
-.. _mjs_attachFrame:
-
-`mjs_attachFrame <#mjs_attachFrame>`__
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. mujoco-include:: mjs_attachFrame
-
-Attach child frame to a parent body, return the attached frame if success or NULL otherwise.
-
-.. _mjs_attachToSite:
-
-`mjs_attachToSite <#mjs_attachToSite>`__
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. mujoco-include:: mjs_attachToSite
-
-Attach child body to a parent site, return the attached body if success or NULL otherwise.
+Attach child to a parent, return the attached element if success or NULL otherwise.
 
 .. _mjs_detachBody:
 
@@ -3842,7 +3824,16 @@ Attach child body to a parent site, return the attached body if success or NULL 
 
 .. mujoco-include:: mjs_detachBody
 
-Detach body from mjSpec, remove all references and delete the body, return 0 on success.
+Delete body and descendants from mjSpec, remove all references, return 0 on success.
+
+.. _mjs_detachDefault:
+
+`mjs_detachDefault <#mjs_detachDefault>`__
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. mujoco-include:: mjs_detachDefault
+
+Delete default class and descendants from mjSpec, remove all references, return 0 on success.
 
 .. _AddTreeElements:
 
@@ -3927,7 +3918,8 @@ Add frame to body.
 
 .. mujoco-include:: mjs_delete
 
-Delete object corresponding to the given element, return 0 on success.
+Delete object corresponding to the given element, return 0 on success. This function should only be used for element
+types that cannot have children, i.e. excluding bodies and default classes.
 
 .. _AddNonTreeElements:
 
@@ -4193,6 +4185,15 @@ Find child body by name.
 
 Get parent body.
 
+.. _mjs_getFrame:
+
+`mjs_getFrame <#mjs_getFrame>`__
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. mujoco-include:: mjs_getFrame
+
+Get parent frame.
+
 .. _mjs_findFrame:
 
 `mjs_findFrame <#mjs_findFrame>`__
@@ -4400,6 +4401,15 @@ Get string contents.
 
 Get double array contents and optionally its size.
 
+.. _mjs_getPluginAttributes:
+
+`mjs_getPluginAttributes <#mjs_getPluginAttributes>`__
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. mujoco-include:: mjs_getPluginAttributes
+
+Get plugin attributes.
+
 .. _SpecUtilities:
 
 Spec utilities
@@ -4420,7 +4430,7 @@ Set element's default.
 
 .. mujoco-include:: mjs_setFrame
 
-Set element's enclosing frame.
+Set element's enclosing frame, return 0 on success.
 
 .. _mjs_resolveOrientation:
 
@@ -4439,6 +4449,44 @@ Resolve alternative orientations to quat, return error if any.
 .. mujoco-include:: mjs_bodyToFrame
 
 Transform body into a frame.
+
+.. _mjs_setUserValue:
+
+`mjs_setUserValue <#mjs_setUserValue>`__
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. mujoco-include:: mjs_setUserValue
+
+Set user payload, overriding the existing value for the specified key if present.
+
+.. _mjs_setUserValueWithCleanup:
+
+`mjs_setUserValueWithCleanup <#mjs_setUserValueWithCleanup>`__
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. mujoco-include:: mjs_setUserValueWithCleanup
+
+Set user payload, overriding the existing value for the specified key if
+present. This version differs from mjs_setUserValue in that it takes a
+cleanup function that will be called when the user payload is deleted.
+
+.. _mjs_getUserValue:
+
+`mjs_getUserValue <#mjs_getUserValue>`__
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. mujoco-include:: mjs_getUserValue
+
+Return user payload or NULL if none found.
+
+.. _mjs_deleteUserValue:
+
+`mjs_deleteUserValue <#mjs_deleteUserValue>`__
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. mujoco-include:: mjs_deleteUserValue
+
+Delete user payload.
 
 .. _ElementInitialization:
 

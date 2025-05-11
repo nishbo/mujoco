@@ -113,6 +113,43 @@ static void printSparse(const char* str, const mjtNum* mat, int nr,
 
 
 
+// print sparse inertia-like matrix
+static void printInertia(const char* str, const mjtNum* mat, const mjModel* m,
+                         FILE* fp, const char* float_format) {
+  int nv = m->nv;
+  // if no data, or too many rows to be visually useful, return
+  if (!mat || !nv || nv > 300) {
+    return;
+  }
+
+  // get length of string produced by float_format
+  char test[100];
+  int len = snprintf(test, sizeof(test), float_format, 0.0);
+
+  fprintf(fp, "%s\n", str);
+
+  for (int i=0; i < nv; i++) {
+    fprintf(fp, " ");
+    int adr = (i == nv-1) ? m->nM - 1 : m->dof_Madr[i+1] - 1;
+    for (int k=0; k <= i; k++) {
+      int j = i;
+      while (j != k && j >= 0) {
+        j = m->dof_parentid[j];
+      }
+      if (j == k) {
+        fprintf(fp, " ");
+        fprintf(fp, float_format, mat[adr--]);
+      } else {
+        for (int d=0; d < len+1; d++) fprintf(fp, " ");
+      }
+    }
+    fprintf(fp, "\n");
+  }
+  fprintf(fp, "\n");
+}
+
+
+
 // print sparse matrix structure
 void mj_printSparsity(const char* str, int nr, int nc, const int* rowadr, const int* diag,
                       const int* rownnz, const int* rowsuper, const int* colind, FILE* fp) {
@@ -859,15 +896,12 @@ void mj_printModel(const mjModel* m, const char* filename) {
 
 // print mjModel to text file, specifying format. float_format must be a
 // valid printf-style format string for a single float value
-void mj_printFormattedData(const mjModel* m, mjData* d, const char* filename,
+void mj_printFormattedData(const mjModel* m, const mjData* d, const char* filename,
                            const char* float_format) {
   // stack in use, SHOULD NOT OCCUR
   if (d->pstack) {
     mjERROR("attempting to print mjData when stack is in use");
   }
-
-  mjtNum *M = NULL;
-  mj_markStack(d);
 
   // check format string
   if (!validateFloatFormat(float_format)) {
@@ -886,13 +920,7 @@ void mj_printFormattedData(const mjModel* m, mjData* d, const char* filename,
   // check for nullptr
   if (!fp) {
     mju_warning("Could not open file '%s' for writing mjModel", filename);
-    mj_freeStack(d);
     return;
-  }
-
-  // allocate full inertia if it's small
-  if (m->nv <= 200) {
-    M = mjSTACKALLOC(d, m->nv*m->nv, mjtNum);
   }
 
 #ifdef MEMORY_SANITIZER
@@ -980,9 +1008,8 @@ void mj_printFormattedData(const mjModel* m, mjData* d, const char* filename,
   // SOLVER STAT
   if (d->nefc) {
     fprintf(fp, "SOLVER STAT\n");
-    fprintf(fp, "  solver_nisland = %d\n", d->solver_nisland);
     printVector("  solver_fwdinv = ", d->solver_fwdinv, 2, fp, float_format);
-    int nisland_stat = mjMIN(d->solver_nisland, mjNISLAND);
+    int nisland_stat = mjMAX(1, mjMIN(d->nisland, mjNISLAND));
     for (int island=0; island < nisland_stat; island++) {
       int niter_stat = mjMIN(mjNSOLVER, d->solver_niter[island]);
       if (niter_stat) {
@@ -990,7 +1017,7 @@ void mj_printFormattedData(const mjModel* m, mjData* d, const char* filename,
         fprintf(fp, "    solver_niter = %d\n", d->solver_niter[island]);
         fprintf(fp, "    solver_nnz = %d\n",  d->solver_nnz[island]);
         for (int i=0; i < niter_stat; i++) {
-          mjSolverStat* stat = d->solver + island*mjNSOLVER + i;
+          const mjSolverStat* stat = d->solver + island*mjNSOLVER + i;
           fprintf(fp, "      %d:  improvement = ", i);
           fprintf(fp, float_format, stat->improvement);
           fprintf(fp, "    gradient = ");
@@ -1097,17 +1124,16 @@ void mj_printFormattedData(const mjModel* m, mjData* d, const char* filename,
               d->moment_rowadr, d->moment_colind, fp, float_format);
   printArray("CRB", m->nbody, 10, d->crb, fp, float_format);
 
-  if (M) {
-    // construct and print full M matrix
-    mj_fullM(m, M, d->qM);
-    printArray("QM", m->nv, m->nv, M, fp, float_format);
+  printInertia("QM", d->qM, m, fp, float_format);
 
-    // construct and print full LD matrix
-    mj_fullM(m, M, d->qLD);
-    printArray("QLD", m->nv, m->nv, M, fp, float_format);
-  }
-
+  printSparse("QLD", d->qLD, m->nv, d->M_rownnz,
+              d->M_rowadr, d->M_colind, fp, float_format);
   printArray("QLDIAGINV", m->nv, 1, d->qLDiagInv, fp, float_format);
+
+  if (!mju_isZero(d->qHDiagInv, m->nv)) {
+    printSparse("QH", d->qH, m->nv, d->M_rownnz, d->M_rowadr, d->M_colind, fp, float_format);
+    printArray("QHDIAGINV", m->nv, 1, d->qHDiagInv, fp, float_format);
+  }
 
   // B sparse structure
   mj_printSparsity("B: body-dof matrix", m->nbody, m->nv, d->B_rowadr, NULL, d->B_rownnz, NULL,
@@ -1131,6 +1157,37 @@ void mj_printFormattedData(const mjModel* m, mjData* d, const char* filename,
   fprintf(fp, NAME_FORMAT, "B_colind");
   for (int i = 0; i < m->nB; i++) {
     fprintf(fp, " %d", d->B_colind[i]);
+  }
+  fprintf(fp, "\n\n");
+
+  // M sparse structure
+  mj_printSparsity("M: inertia matrix", m->nv, m->nv, d->M_rowadr, NULL, d->M_rownnz,
+                   NULL, d->M_colind, fp);
+
+  fprintf(fp, NAME_FORMAT, "M_rownnz");
+  for (int i = 0; i < m->nv; i++) {
+    fprintf(fp, " %d", d->M_rownnz[i]);
+  }
+  fprintf(fp, "\n\n");
+
+  // M_rowadr
+  fprintf(fp, NAME_FORMAT, "M_rowadr");
+  for (int i = 0; i < m->nv; i++) {
+    fprintf(fp, " %d", d->M_rowadr[i]);
+  }
+  fprintf(fp, "\n\n");
+
+  // M_colind
+  fprintf(fp, NAME_FORMAT, "M_colind");
+  for (int i = 0; i < m->nM; i++) {
+    fprintf(fp, " %d", d->M_colind[i]);
+  }
+  fprintf(fp, "\n\n");
+
+  // mapM2M
+  fprintf(fp, NAME_FORMAT, "mapM2M");
+  for (int i = 0; i < m->nM; i++) {
+    fprintf(fp, " %d", d->mapM2M[i]);
   }
   fprintf(fp, "\n\n");
 
@@ -1204,15 +1261,15 @@ void mj_printFormattedData(const mjModel* m, mjData* d, const char* filename,
   }
   fprintf(fp, "\n\n");
 
-  if (M) {
-    // print qDeriv
-    mju_sparse2dense(M, d->qDeriv, m->nv, m->nv, d->D_rownnz, d->D_rowadr, d->D_colind);
-    printArray("QDERIV", m->nv, m->nv, M, fp, float_format);
+  // print qDeriv
+  if (!mju_isZero(d->qDeriv, m->nD)) {
+    printSparse("QDERIV", d->qDeriv, m->nv, d->D_rownnz, d->D_rowadr, d->D_colind,
+                fp, float_format);
+  }
 
-    // print qLU
-    mju_sparse2dense(M, d->qLU, m->nv, m->nv, d->D_rownnz, d->D_rowadr,
-                    d->D_colind);
-    printArray("QLU", m->nv, m->nv, M, fp, float_format);
+  // print qLU
+  if (!mju_isZero(d->qLU, m->nD)) {
+    printSparse("QLU", d->qLU, m->nv, d->D_rownnz, d->D_rowadr, d->D_colind, fp, float_format);
   }
 
   // contact
@@ -1335,27 +1392,30 @@ void mj_printFormattedData(const mjModel* m, mjData* d, const char* filename,
     }
     fprintf(fp, "\n\n");
 
-    fprintf(fp, NAME_FORMAT, "ISLAND_DOFNUM");
+    fprintf(fp, NAME_FORMAT, "ISLAND_NV");
     for (int i = 0; i < d->nisland; i++) {
-      fprintf(fp, " %d", d->island_dofnum[i]);
+      fprintf(fp, " %d", d->island_nv[i]);
     }
     fprintf(fp, "\n\n");
 
-    fprintf(fp, NAME_FORMAT, "ISLAND_DOFADR");
+    fprintf(fp, NAME_FORMAT, "ISLAND_IDOFADR");
     for (int i = 0; i < d->nisland; i++) {
-      fprintf(fp, " %d", d->island_dofadr[i]);
+      fprintf(fp, " %d", d->island_idofadr[i]);
     }
     fprintf(fp, "\n\n");
 
-    fprintf(fp, NAME_FORMAT, "ISLAND_DOFIND");
+    fprintf(fp, NAME_FORMAT, "MAP_IDOF2DOF");
     for (int i = 0; i < m->nv; i++) {
-      fprintf(fp, " %d", d->island_dofind[i]);
-    }
-    fprintf(fp, "\n\n");
+      int dof = d->map_idof2dof[i];
+      if (i > 0) {
+        int dofprev = d->map_idof2dof[i-1];
 
-    fprintf(fp, NAME_FORMAT, "DOF_ISLANDIND");
-    for (int i = 0; i < m->nv; i++) {
-      fprintf(fp, " %d", d->dof_islandind[i]);
+        // print '|' at island boundaries
+        if (d->dof_island[dof] != d->dof_island[dofprev]) {
+          fprintf(fp, " |");
+        }
+      }
+      fprintf(fp, " %d", dof);
     }
     fprintf(fp, "\n\n");
 
@@ -1365,21 +1425,30 @@ void mj_printFormattedData(const mjModel* m, mjData* d, const char* filename,
     }
     fprintf(fp, "\n\n");
 
-    fprintf(fp, NAME_FORMAT, "ISLAND_EFCNUM");
+    fprintf(fp, NAME_FORMAT, "ISLAND_NEFC");
     for (int i = 0; i < d->nisland; i++) {
-      fprintf(fp, " %d", d->island_efcnum[i]);
+      fprintf(fp, " %d", d->island_nefc[i]);
     }
     fprintf(fp, "\n\n");
 
-    fprintf(fp, NAME_FORMAT, "ISLAND_EFCADR");
+    fprintf(fp, NAME_FORMAT, "ISLAND_IEFCADR");
     for (int i = 0; i < d->nisland; i++) {
-      fprintf(fp, " %d", d->island_efcadr[i]);
+      fprintf(fp, " %d", d->island_iefcadr[i]);
     }
     fprintf(fp, "\n\n");
 
-    fprintf(fp, NAME_FORMAT, "ISLAND_EFCIND");
+    fprintf(fp, NAME_FORMAT, "MAP_IEFC2EFC");
     for (int i = 0; i < d->nefc; i++) {
-      fprintf(fp, " %d", d->island_efcind[i]);
+      int efc = d->map_iefc2efc[i];
+      if (i > 0) {
+        int efcprev = d->map_iefc2efc[i-1];
+
+        // print '|' at island boundaries
+        if (d->efc_island[efc] != d->efc_island[efcprev]) {
+          fprintf(fp, " |");
+        }
+      }
+      fprintf(fp, " %d", efc);
     }
     fprintf(fp, "\n\n");
   }
@@ -1401,8 +1470,6 @@ void mj_printFormattedData(const mjModel* m, mjData* d, const char* filename,
   if (filename) {
     fclose(fp);
   }
-
-  mj_freeStack(d);
 }
 
 
@@ -1412,6 +1479,6 @@ void mj_printFormattedData(const mjModel* m, mjData* d, const char* filename,
 
 
 // print mjData to text file
-void mj_printData(const mjModel* m, mjData* d, const char* filename) {
+void mj_printData(const mjModel* m, const mjData* d, const char* filename) {
   mj_printFormattedData(m, d, filename, FLOAT_FORMAT);
 }

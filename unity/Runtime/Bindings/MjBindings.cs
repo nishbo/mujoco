@@ -41,6 +41,7 @@ public const double mjMINIMP = 0.0001;
 public const double mjMAXIMP = 0.9999;
 public const int mjMAXCONPAIR = 50;
 public const int mjMAXTREEDEPTH = 50;
+public const int mjMAXFLEXNODES = 27;
 public const int mjNEQDATA = 11;
 public const int mjNDYN = 10;
 public const int mjNGAIN = 10;
@@ -109,7 +110,7 @@ public const int mjMAXLINEPNT = 1000;
 public const int mjMAXPLANEGRID = 200;
 public const bool THIRD_PARTY_MUJOCO_MJXMACRO_H_ = true;
 public const bool THIRD_PARTY_MUJOCO_MUJOCO_H_ = true;
-public const int mjVERSION_HEADER = 328;
+public const int mjVERSION_HEADER = 333;
 
 
 // ------------------------------------Enums------------------------------------
@@ -159,7 +160,8 @@ public enum mjtDisableBit : int{
   mjDSBL_MIDPHASE = 8192,
   mjDSBL_EULERDAMP = 16384,
   mjDSBL_AUTORESET = 32768,
-  mjNDISABLE = 16,
+  mjDSBL_NATIVECCD = 65536,
+  mjNDISABLE = 17,
 }
 public enum mjtEnableBit : int{
   mjENBL_OVERRIDE = 1,
@@ -168,8 +170,7 @@ public enum mjtEnableBit : int{
   mjENBL_INVDISCRETE = 8,
   mjENBL_MULTICCD = 16,
   mjENBL_ISLAND = 32,
-  mjENBL_NATIVECCD = 64,
-  mjNENABLE = 7,
+  mjNENABLE = 6,
 }
 public enum mjtJoint : int{
   mjJNT_FREE = 0,
@@ -318,6 +319,8 @@ public enum mjtObj : int{
   mjOBJ_PLUGIN = 25,
   mjNOBJECT = 26,
   mjOBJ_FRAME = 100,
+  mjOBJ_DEFAULT = 101,
+  mjOBJ_MODEL = 102,
 }
 public enum mjtConstraint : int{
   mjCNSTR_EQUALITY = 0,
@@ -354,34 +357,35 @@ public enum mjtSensor : int{
   mjSENS_ACTUATORVEL = 14,
   mjSENS_ACTUATORFRC = 15,
   mjSENS_JOINTACTFRC = 16,
-  mjSENS_BALLQUAT = 17,
-  mjSENS_BALLANGVEL = 18,
-  mjSENS_JOINTLIMITPOS = 19,
-  mjSENS_JOINTLIMITVEL = 20,
-  mjSENS_JOINTLIMITFRC = 21,
-  mjSENS_TENDONLIMITPOS = 22,
-  mjSENS_TENDONLIMITVEL = 23,
-  mjSENS_TENDONLIMITFRC = 24,
-  mjSENS_FRAMEPOS = 25,
-  mjSENS_FRAMEQUAT = 26,
-  mjSENS_FRAMEXAXIS = 27,
-  mjSENS_FRAMEYAXIS = 28,
-  mjSENS_FRAMEZAXIS = 29,
-  mjSENS_FRAMELINVEL = 30,
-  mjSENS_FRAMEANGVEL = 31,
-  mjSENS_FRAMELINACC = 32,
-  mjSENS_FRAMEANGACC = 33,
-  mjSENS_SUBTREECOM = 34,
-  mjSENS_SUBTREELINVEL = 35,
-  mjSENS_SUBTREEANGMOM = 36,
-  mjSENS_GEOMDIST = 37,
-  mjSENS_GEOMNORMAL = 38,
-  mjSENS_GEOMFROMTO = 39,
-  mjSENS_E_POTENTIAL = 40,
-  mjSENS_E_KINETIC = 41,
-  mjSENS_CLOCK = 42,
-  mjSENS_PLUGIN = 43,
-  mjSENS_USER = 44,
+  mjSENS_TENDONACTFRC = 17,
+  mjSENS_BALLQUAT = 18,
+  mjSENS_BALLANGVEL = 19,
+  mjSENS_JOINTLIMITPOS = 20,
+  mjSENS_JOINTLIMITVEL = 21,
+  mjSENS_JOINTLIMITFRC = 22,
+  mjSENS_TENDONLIMITPOS = 23,
+  mjSENS_TENDONLIMITVEL = 24,
+  mjSENS_TENDONLIMITFRC = 25,
+  mjSENS_FRAMEPOS = 26,
+  mjSENS_FRAMEQUAT = 27,
+  mjSENS_FRAMEXAXIS = 28,
+  mjSENS_FRAMEYAXIS = 29,
+  mjSENS_FRAMEZAXIS = 30,
+  mjSENS_FRAMELINVEL = 31,
+  mjSENS_FRAMEANGVEL = 32,
+  mjSENS_FRAMELINACC = 33,
+  mjSENS_FRAMEANGACC = 34,
+  mjSENS_SUBTREECOM = 35,
+  mjSENS_SUBTREELINVEL = 36,
+  mjSENS_SUBTREEANGMOM = 37,
+  mjSENS_GEOMDIST = 38,
+  mjSENS_GEOMNORMAL = 39,
+  mjSENS_GEOMFROMTO = 40,
+  mjSENS_E_POTENTIAL = 41,
+  mjSENS_E_KINETIC = 42,
+  mjSENS_CLOCK = 43,
+  mjSENS_PLUGIN = 44,
+  mjSENS_USER = 45,
 }
 public enum mjtStage : int{
   mjSTAGE_NONE = 0,
@@ -457,9 +461,10 @@ public enum mjtGeomInertia : int{
   mjINERTIA_SHELL = 1,
 }
 public enum mjtMeshInertia : int{
-  mjINERTIA_CONVEX = 0,
-  mjINERTIA_EXACT = 1,
-  mjINERTIA_LEGACY = 2,
+  mjMESH_INERTIA_CONVEX = 0,
+  mjMESH_INERTIA_EXACT = 1,
+  mjMESH_INERTIA_LEGACY = 2,
+  mjMESH_INERTIA_SHELL = 3,
 }
 public enum mjtBuiltin : int{
   mjBUILTIN_NONE = 0,
@@ -4821,7 +4826,6 @@ public unsafe struct mjData_ {
   public mjSolverStat_ solver3997;
   public mjSolverStat_ solver3998;
   public mjSolverStat_ solver3999;
-  public int solver_nisland;
   public fixed int solver_niter[20];
   public fixed int solver_nnz[20];
   public fixed double solver_fwdinv[2];
@@ -4856,6 +4860,7 @@ public unsafe struct mjData_ {
   public int nJ;
   public int nA;
   public int nisland;
+  public int nidof;
   public double time;
   public fixed double energy[2];
   public void* buffer;
@@ -4940,6 +4945,10 @@ public unsafe struct mjData_ {
   public int* B_rownnz;
   public int* B_rowadr;
   public int* B_colind;
+  public int* M_rownnz;
+  public int* M_rowadr;
+  public int* M_colind;
+  public int* mapM2M;
   public int* C_rownnz;
   public int* C_rowadr;
   public int* C_colind;
@@ -4983,14 +4992,43 @@ public unsafe struct mjData_ {
   public double* efc_R;
   public int* tendon_efcadr;
   public int* dof_island;
-  public int* island_dofnum;
+  public int* island_nv;
+  public int* island_idofadr;
   public int* island_dofadr;
-  public int* island_dofind;
-  public int* dof_islandind;
+  public int* map_dof2idof;
+  public int* map_idof2dof;
+  public double* ifrc_smooth;
+  public double* iacc_smooth;
+  public int* iM_rownnz;
+  public int* iM_rowadr;
+  public int* iM_diagnum;
+  public int* iM_colind;
+  public double* iM;
+  public double* iLD;
+  public double* iLDiagInv;
+  public double* iacc;
   public int* efc_island;
-  public int* island_efcnum;
-  public int* island_efcadr;
-  public int* island_efcind;
+  public int* island_ne;
+  public int* island_nf;
+  public int* island_nefc;
+  public int* island_iefcadr;
+  public int* map_efc2iefc;
+  public int* map_iefc2efc;
+  public int* iefc_type;
+  public int* iefc_id;
+  public int* iefc_J_rownnz;
+  public int* iefc_J_rowadr;
+  public int* iefc_J_rowsuper;
+  public int* iefc_J_colind;
+  public int* iefc_JT_rownnz;
+  public int* iefc_JT_rowadr;
+  public int* iefc_JT_rowsuper;
+  public int* iefc_JT_colind;
+  public double* iefc_J;
+  public double* iefc_JT;
+  public double* iefc_frictionloss;
+  public double* iefc_D;
+  public double* iefc_R;
   public int* efc_AR_rownnz;
   public int* efc_AR_rowadr;
   public int* efc_AR_colind;
@@ -4998,9 +5036,14 @@ public unsafe struct mjData_ {
   public double* efc_vel;
   public double* efc_aref;
   public double* efc_b;
-  public double* efc_force;
+  public double* iefc_aref;
+  public int* iefc_state;
+  public double* iefc_force;
   public int* efc_state;
+  public double* efc_force;
+  public double* ifrc_constraint;
   public UIntPtr threadpool;
+  public UInt64 signature;
 }
 
 [StructLayout(LayoutKind.Sequential)]
@@ -5191,6 +5234,7 @@ public unsafe struct mjModel_ {
   public int ncam;
   public int nlight;
   public int nflex;
+  public int nflexnode;
   public int nflexvert;
   public int nflexedge;
   public int nflexelem;
@@ -5205,6 +5249,9 @@ public unsafe struct mjModel_ {
   public int nmeshtexcoord;
   public int nmeshface;
   public int nmeshgraph;
+  public int nmeshpoly;
+  public int nmeshpolyvert;
+  public int nmeshpolymap;
   public int nskin;
   public int nskinvert;
   public int nskintexvert;
@@ -5411,6 +5458,9 @@ public unsafe struct mjModel_ {
   public int* flex_dim;
   public int* flex_matid;
   public int* flex_group;
+  public int* flex_interp;
+  public int* flex_nodeadr;
+  public int* flex_nodenum;
   public int* flex_vertadr;
   public int* flex_vertnum;
   public int* flex_edgeadr;
@@ -5424,15 +5474,19 @@ public unsafe struct mjModel_ {
   public int* flex_evpairadr;
   public int* flex_evpairnum;
   public int* flex_texcoordadr;
+  public int* flex_nodebodyid;
   public int* flex_vertbodyid;
   public int* flex_edge;
   public int* flex_elem;
+  public int* flex_elemtexcoord;
   public int* flex_elemedge;
   public int* flex_elemlayer;
   public int* flex_shell;
   public int* flex_evpair;
   public double* flex_vert;
   public double* flex_vert0;
+  public double* flex_node;
+  public double* flex_node0;
   public double* flexedge_length0;
   public double* flexedge_invweight0;
   public double* flex_radius;
@@ -5471,6 +5525,15 @@ public unsafe struct mjModel_ {
   public double* mesh_pos;
   public double* mesh_quat;
   public int* mesh_pathadr;
+  public int* mesh_polynum;
+  public int* mesh_polyadr;
+  public double* mesh_polynormal;
+  public int* mesh_polyvertadr;
+  public int* mesh_polyvertnum;
+  public int* mesh_polyvert;
+  public int* mesh_polymapadr;
+  public int* mesh_polymapnum;
+  public int* mesh_polymap;
   public int* skin_matid;
   public int* skin_group;
   public float* skin_rgba;
@@ -5540,15 +5603,18 @@ public unsafe struct mjModel_ {
   public int* tendon_matid;
   public int* tendon_group;
   public byte* tendon_limited;
+  public byte* tendon_actfrclimited;
   public double* tendon_width;
   public double* tendon_solref_lim;
   public double* tendon_solimp_lim;
   public double* tendon_solref_fri;
   public double* tendon_solimp_fri;
   public double* tendon_range;
+  public double* tendon_actfrcrange;
   public double* tendon_margin;
   public double* tendon_stiffness;
   public double* tendon_damping;
+  public double* tendon_armature;
   public double* tendon_frictionloss;
   public double* tendon_lengthspring;
   public double* tendon_length0;
@@ -5645,6 +5711,7 @@ public unsafe struct mjModel_ {
   public char* names;
   public int* names_map;
   public char* paths;
+  public UInt64 signature;
 }
 
 [StructLayout(LayoutKind.Sequential)]
@@ -5735,6 +5802,7 @@ public unsafe struct mjsCompiler_ {
   public byte fusestatic;
   public int inertiafromgeom;
   public fixed int inertiagrouprange[2];
+  public byte saveinertial;
   public int alignfree;
   public mjLROpt_ LRopt;
 }
@@ -6296,9 +6364,14 @@ public unsafe struct model {
   public int* flex_dim;
   public int* flex_matid;
   public int* flex_group;
+  public int* flex_interp;
+  public int* flex_nodeadr;
+  public int* flex_nodenum;
+  public int* flex_nodebodyid;
   public int* flex_vertadr;
   public int* flex_vertnum;
   public int* flex_elem;
+  public int* flex_elemtexcoord;
   public int* flex_elemlayer;
   public int* flex_elemadr;
   public int* flex_elemnum;
@@ -6309,8 +6382,11 @@ public unsafe struct model {
   public int* flex_texcoordadr;
   public int* flex_bvhadr;
   public int* flex_bvhnum;
+  public byte* flex_centered;
+  public double* flex_node;
   public double* flex_radius;
   public float* flex_rgba;
+  public float* flex_texcoord;
   public int* hfield_pathadr;
   public int* mesh_bvhadr;
   public int* mesh_bvhnum;
@@ -6358,8 +6434,10 @@ public unsafe struct model {
   public int* tendon_matid;
   public int* tendon_group;
   public byte* tendon_limited;
+  public byte* tendon_actfrclimited;
   public double* tendon_width;
   public double* tendon_range;
+  public double* tendon_actfrcrange;
   public double* tendon_stiffness;
   public double* tendon_damping;
   public double* tendon_frictionloss;
@@ -6435,7 +6513,6 @@ public unsafe struct data {
   public double* bvh_aabb_dyn;
   public byte* bvh_active;
   public int* island_dofadr;
-  public int* island_dofind;
   public int* dof_island;
   public int* efc_island;
   public int* tendon_efcadr;

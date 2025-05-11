@@ -453,19 +453,51 @@ void mj_flex(const mjModel* m, mjData* d) {
   for (int f=0; f < m->nflex; f++) {
     int vstart = m->flex_vertadr[f];
     int vend = m->flex_vertadr[f] + m->flex_vertnum[f];
+    int nstart = m->flex_nodeadr[f];
+    int nend = m->flex_nodeadr[f] + m->flex_nodenum[f];
 
-    // centered: copy body position
-    if (m->flex_centered[f]) {
-      for (int i=vstart; i < vend; i++) {
-        mju_copy3(d->flexvert_xpos+3*i, d->xpos+3*m->flex_vertbodyid[i]);
+    // 0: vertices are the mesh vertices, 1: vertices are interpolated from nodal dofs
+    if (m->flex_interp[f] == 0) {
+      // centered: copy body position
+      if (m->flex_centered[f]) {
+        for (int i=vstart; i < vend; i++) {
+          mju_copy3(d->flexvert_xpos+3*i, d->xpos+3*m->flex_vertbodyid[i]);
+        }
+      }
+
+      // non-centered: map from local to global
+      else {
+        for (int i=vstart; i < vend; i++) {
+          mju_mulMatVec3(d->flexvert_xpos+3*i, d->xmat+9*m->flex_vertbodyid[i], m->flex_vert+3*i);
+          mju_addTo3(d->flexvert_xpos+3*i, d->xpos+3*m->flex_vertbodyid[i]);
+        }
       }
     }
 
-    // non-centered: map from local to global
+    // trilinear interpolation
     else {
+      mjtNum nodexpos[mjMAXFLEXNODES];
+      if (m->flex_centered[f]) {
+        for (int i=nstart; i < nend; i++) {
+          mju_copy3(nodexpos + 3*(i-nstart), d->xpos + 3*m->flex_nodebodyid[i]);
+        }
+      } else {
+        for (int i=nstart; i < nend; i++) {
+          int j = i - nstart;
+          mju_mulMatVec3(nodexpos + 3*j, d->xmat + 9*m->flex_nodebodyid[i], m->flex_node + 3*i);
+          mju_addTo3(nodexpos + 3*j, d->xpos + 3*m->flex_nodebodyid[i]);
+        }
+      }
+
       for (int i=vstart; i < vend; i++) {
-        mju_mulMatVec3(d->flexvert_xpos+3*i, d->xmat+9*m->flex_vertbodyid[i], m->flex_vert+3*i);
-        mju_addTo3(d->flexvert_xpos+3*i, d->xpos+3*m->flex_vertbodyid[i]);
+        mju_zero3(d->flexvert_xpos+3*i);
+        mjtNum* coord = m->flex_vert0 + 3*i;
+        for (int j=0; j < nend-nstart; j++) {
+          mjtNum coef = (j&1 ? coord[2] : 1-coord[2]) *
+                        (j&2 ? coord[1] : 1-coord[1]) *
+                        (j&4 ? coord[0] : 1-coord[0]);
+          mju_addToScl3(d->flexvert_xpos+3*i, nodexpos+3*j, coef);
+        }
       }
     }
   }
@@ -542,7 +574,7 @@ void mj_flex(const mjModel* m, mjData* d) {
   // compute lengths and Jacobians of edges
   for (int f=0; f < m->nflex; f++) {
     // skip if edges cannot generate forces
-    if (m->flex_rigid[f]) {
+    if (m->flex_rigid[f] || m->flex_interp[f]) {
       continue;
     }
 
@@ -618,18 +650,16 @@ void mj_flex(const mjModel* m, mjData* d) {
 // compute tendon lengths and moments
 void mj_tendon(const mjModel* m, mjData* d) {
   int issparse = mj_isSparse(m), nv = m->nv, nten = m->ntendon;
-  int id0, id1, idw, adr, wcnt, wbody[4], sideid;
-  int tp0, tp1, tpw, NV, *chain = NULL, *buf_ind = NULL;
   int *rownnz = d->ten_J_rownnz, *rowadr = d->ten_J_rowadr, *colind = d->ten_J_colind;
-  mjtNum dif[3], divisor, wpnt[12], wlen;
   mjtNum *L = d->ten_length, *J = d->ten_J;
-  mjtNum *jac1, *jac2, *jacdif, *tmp, *sparse_buf = NULL;
 
   if (!nten) {
     return;
   }
 
-  // allocate space
+  // allocate stack arrays
+  int *chain = NULL, *buf_ind = NULL;
+  mjtNum *jac1, *jac2, *jacdif, *tmp, *sparse_buf = NULL;
   mj_markStack(d);
   jac1 = mjSTACKALLOC(d, 3*nv, mjtNum);
   jac2 = mjSTACKALLOC(d, 3*nv, mjtNum);
@@ -643,7 +673,6 @@ void mj_tendon(const mjModel* m, mjData* d) {
 
   // clear results
   mju_zero(L, nten);
-  wcnt = 0;
 
   // clear Jacobian: sparse or dense
   if (issparse) {
@@ -653,10 +682,11 @@ void mj_tendon(const mjModel* m, mjData* d) {
   }
 
   // loop over tendons
+  int wrapcount = 0;
   for (int i=0; i < nten; i++) {
     // initialize tendon path
-    adr = m->tendon_adr[i];
-    d->ten_wrapadr[i] = wcnt;
+    int adr = m->tendon_adr[i];
+    d->ten_wrapadr[i] = wrapcount;
     d->ten_wrapnum[i] = 0;
     int tendon_num = m->tendon_num[i];
 
@@ -665,7 +695,7 @@ void mj_tendon(const mjModel* m, mjData* d) {
       rowadr[i] = (i > 0 ? rowadr[i-1] + rownnz[i-1] : 0);
     }
 
-    // process joint tendon
+    // process fixed tendon
     if (m->wrap_type[adr] == mjWRAP_JOINT) {
       // process all defined joints
       for (int j=0; j < tendon_num; j++) {
@@ -677,9 +707,10 @@ void mj_tendon(const mjModel* m, mjData* d) {
 
         // add to moment
         if (issparse) {
-          J[rowadr[i] + rownnz[i]] = m->wrap_prm[adr+j];
-          colind[rowadr[i] + rownnz[i]] = m->jnt_dofadr[k];
-          rownnz[i]++;
+          rownnz[i] = mju_combineSparse(J+rowadr[i], &m->wrap_prm[adr+j], 1, 1,
+                                        rownnz[i], 1,
+                                        colind+rowadr[i], &m->jnt_dofadr[k],
+                                        sparse_buf, buf_ind);
         }
 
         // add to moment: dense
@@ -688,47 +719,28 @@ void mj_tendon(const mjModel* m, mjData* d) {
         }
       }
 
-      // sort on colind if sparse: custom insertion sort
-      if (issparse) {
-        int x, *list = colind+rowadr[i], nnz = rownnz[i];
-        mjtNum y, *listy = J+rowadr[i];
-
-        for (int k=1; k < nnz; k++) {
-          x = list[k];
-          y = listy[k];
-          int j = k-1;
-          while (j >= 0 && list[j] > x) {
-            list[j+1] = list[j];
-            listy[j+1] = listy[j];
-            j--;
-          }
-          list[j+1] = x;
-          listy[j+1] = y;
-        }
-      }
-
       continue;
     }
 
     // process spatial tendon
-    divisor = 1;
-    int j = 0;
+    mjtNum divisor = 1;
+    int wraptype, j = 0;
     while (j < tendon_num-1) {
       // get 1st and 2nd object
-      tp0 = m->wrap_type[adr+j];
-      id0 = m->wrap_objid[adr+j];
-      tp1 = m->wrap_type[adr+j+1];
-      id1 = m->wrap_objid[adr+j+1];
+      int type0 = m->wrap_type[adr+j+0];
+      int type1 = m->wrap_type[adr+j+1];
+      int id0 = m->wrap_objid[adr+j+0];
+      int id1 = m->wrap_objid[adr+j+1];
 
       // pulley
-      if (tp0 == mjWRAP_PULLEY || tp1 == mjWRAP_PULLEY) {
+      if (type0 == mjWRAP_PULLEY || type1 == mjWRAP_PULLEY) {
         // get divisor, insert obj=-2
-        if (tp0 == mjWRAP_PULLEY) {
+        if (type0 == mjWRAP_PULLEY) {
           divisor = m->wrap_prm[adr+j];
-          mju_zero3(d->wrap_xpos+wcnt*3);
-          d->wrap_obj[wcnt] = -2;
+          mju_zero3(d->wrap_xpos+wrapcount*3);
+          d->wrap_obj[wrapcount] = -2;
           d->ten_wrapnum[i]++;
-          wcnt++;
+          wrapcount++;
         }
 
         // move to next
@@ -737,56 +749,60 @@ void mj_tendon(const mjModel* m, mjData* d) {
       }
 
       // init sequence; assume it starts with site
-      wlen = -1;
+      mjtNum wlen = -1;
+      int wrapid = -1;
+      mjtNum wpnt[12];
       mju_copy3(wpnt, d->site_xpos+3*id0);
+      int wbody[4];
       wbody[0] = m->site_bodyid[id0];
 
       // second object is geom: process site-geom-site
-      if (tp1 == mjWRAP_SPHERE || tp1 == mjWRAP_CYLINDER) {
+      if (type1 == mjWRAP_SPHERE || type1 == mjWRAP_CYLINDER) {
         // reassign, get 2nd site info
-        tpw = tp1;
-        idw = id1;
-        tp1 = m->wrap_type[adr+j+2];
+        wraptype = type1;
+        wrapid = id1;
+        type1 = m->wrap_type[adr+j+2];
         id1 = m->wrap_objid[adr+j+2];
 
         // do wrapping, possibly get 2 extra points (wlen>=0)
-        sideid = mju_round(m->wrap_prm[adr+j+1]);
+        int sideid = mju_round(m->wrap_prm[adr+j+1]);
         if (sideid < -1 || sideid >= m->nsite) {
           mjERROR("invalid sideid %d in wrap_prm", sideid);  // SHOULD NOT OCCUR
         }
 
         wlen = mju_wrap(wpnt+3, d->site_xpos+3*id0, d->site_xpos+3*id1,
-                        d->geom_xpos+3*idw, d->geom_xmat+9*idw, m->geom_size[3*idw], tpw,
-                        (sideid >= 0 ? d->site_xpos+3*sideid : 0));
+                        d->geom_xpos+3*wrapid, d->geom_xmat+9*wrapid, m->geom_size[3*wrapid],
+                        wraptype, (sideid >= 0 ? d->site_xpos+3*sideid : 0));
       } else {
-        tpw = mjWRAP_NONE;
+        wraptype = mjWRAP_NONE;
       }
 
       // complete sequence, accumulate lengths
       if (wlen < 0) {
         mju_copy3(wpnt+3, d->site_xpos+3*id1);
         wbody[1] = m->site_bodyid[id1];
-        L[i] += mju_dist3(wpnt, wpnt+3)/divisor;
+        L[i] += mju_dist3(wpnt, wpnt+3) / divisor;
       } else {
         mju_copy3(wpnt+9, d->site_xpos+3*id1);
-        wbody[1] = wbody[2] = m->geom_bodyid[idw];
+        wbody[1] = wbody[2] = m->geom_bodyid[wrapid];
         wbody[3] = m->site_bodyid[id1];
-        L[i] += (mju_dist3(wpnt, wpnt+3) + wlen + mju_dist3(wpnt+6, wpnt+9))/divisor;
+        L[i] += (mju_dist3(wpnt, wpnt+3) + wlen + mju_dist3(wpnt+6, wpnt+9)) / divisor;
       }
 
       // accumulate moments if consecutive points are in different bodies
       for (int k=0; k < (wlen < 0 ? 1 : 3); k++) {
         if (wbody[k] != wbody[k+1]) {
           // get 3D position difference, normalize
+          mjtNum dif[3];
           mju_sub3(dif, wpnt+3*k+3, wpnt+3*k);
           mju_normalize3(dif);
 
           // sparse
           if (issparse) {
             // get endpoint Jacobians, subtract
-            NV = mj_jacDifPair(m, d, chain,
-                               wbody[k], wbody[k+1], wpnt+3*k, wpnt+3*k+3,
-                               jac1, jac2, jacdif, NULL, NULL, NULL);
+            int NV = mj_jacDifPair(m, d, chain,
+                                   wbody[k], wbody[k+1], wpnt+3*k, wpnt+3*k+3,
+                                   jac1, jac2, jacdif, NULL, NULL, NULL);
 
             // no dofs: skip
             if (!NV) {
@@ -819,25 +835,145 @@ void mj_tendon(const mjModel* m, mjData* d) {
       }
 
       // assign to wrap
-      mju_copy(d->wrap_xpos+wcnt*3, wpnt, (wlen < 0 ? 3:9));
-      d->wrap_obj[wcnt] = -1;
+      mju_copy(d->wrap_xpos+wrapcount*3, wpnt, (wlen < 0 ? 3 : 9));
+      d->wrap_obj[wrapcount] = -1;
       if (wlen >= 0) {
-        d->wrap_obj[wcnt+1] = d->wrap_obj[wcnt+2] = idw;
+        d->wrap_obj[wrapcount+1] = d->wrap_obj[wrapcount+2] = wrapid;
       }
-      d->ten_wrapnum[i] += (wlen < 0 ? 1:3);
-      wcnt += (wlen < 0 ? 1:3);
+      d->ten_wrapnum[i] += (wlen < 0 ? 1 : 3);
+      wrapcount += (wlen < 0 ? 1 : 3);
 
       // advance
-      j += (tpw != mjWRAP_NONE ? 2 : 1);
+      j += (wraptype != mjWRAP_NONE ? 2 : 1);
 
       // assign last site before pulley or tendon end
       if (j == tendon_num-1 || m->wrap_type[adr+j+1] == mjWRAP_PULLEY) {
-        mju_copy3(d->wrap_xpos+wcnt*3, d->site_xpos+3*id1);
-        d->wrap_obj[wcnt] = -1;
+        mju_copy3(d->wrap_xpos+wrapcount*3, d->site_xpos+3*id1);
+        d->wrap_obj[wrapcount] = -1;
         d->ten_wrapnum[i]++;
-        wcnt++;
+        wrapcount++;
       }
     }
+  }
+
+  mj_freeStack(d);
+}
+
+
+
+// compute time derivative of dense tendon Jacobian for one tendon
+void mj_tendonDot(const mjModel* m, mjData* d, int id, mjtNum* Jdot) {
+  int nv = m->nv;
+
+  // tendon id is invalid: return
+  if (id < 0 || id >= m->ntendon) {
+    return;
+  }
+
+  // clear output
+  mju_zero(Jdot, nv);
+
+  // fixed tendon has zero Jdot: return
+  int adr = m->tendon_adr[id];
+  if (m->wrap_type[adr] == mjWRAP_JOINT) {
+    return;
+  }
+
+  // allocate stack arrays
+  mj_markStack(d);
+  mjtNum* jac1 = mjSTACKALLOC(d, 3*nv, mjtNum);
+  mjtNum* jac2 = mjSTACKALLOC(d, 3*nv, mjtNum);
+  mjtNum* jacdif = mjSTACKALLOC(d, 3*nv, mjtNum);
+  mjtNum* tmp = mjSTACKALLOC(d, nv, mjtNum);
+
+  // process spatial tendon
+  mjtNum divisor = 1;
+  int wraptype, j = 0;
+  int num = m->tendon_num[id];
+  while (j < num-1) {
+    // get 1st and 2nd object
+    int type0 = m->wrap_type[adr+j+0];
+    int type1 = m->wrap_type[adr+j+1];
+    int id0 = m->wrap_objid[adr+j+0];
+    int id1 = m->wrap_objid[adr+j+1];
+
+    // pulley
+    if (type0 == mjWRAP_PULLEY || type1 == mjWRAP_PULLEY) {
+      // get divisor, insert obj=-2
+      if (type0 == mjWRAP_PULLEY) {
+        divisor = m->wrap_prm[adr+j];
+      }
+
+      // move to next
+      j++;
+      continue;
+    }
+
+    // init sequence; assume it starts with site
+    mjtNum wpnt[6];
+    mju_copy3(wpnt, d->site_xpos+3*id0);
+    mjtNum vel[6];
+    mj_objectVelocity(m, d, mjOBJ_SITE, id0, vel, /*flg_local=*/0);
+    mjtNum wvel[6] = {vel[3], vel[4], vel[5], 0, 0, 0};
+    int wbody[2];
+    wbody[0] = m->site_bodyid[id0];
+
+    // second object is geom: process site-geom-site
+    if (type1 == mjWRAP_SPHERE || type1 == mjWRAP_CYLINDER) {
+      // TODO(tassa) support geom wrapping (requires derivatives of mju_wrap)
+      mjERROR("geom wrapping not supported");
+    } else {
+      wraptype = mjWRAP_NONE;
+    }
+
+    // complete sequence
+    wbody[1] = m->site_bodyid[id1];
+    mju_copy3(wpnt+3, d->site_xpos+3*id1);
+    mj_objectVelocity(m, d, mjOBJ_SITE, id1, vel, /*flg_local=*/0);
+    mju_copy3(wvel+3, vel+3);
+
+    // accumulate moments if consecutive points are in different bodies
+    if (wbody[0] != wbody[1]) {
+      // dpnt = 3D position difference, normalize
+      mjtNum dpnt[3];
+      mju_sub3(dpnt, wpnt+3, wpnt);
+      mjtNum norm = mju_normalize3(dpnt);
+
+      // dvel = d / dt (dpnt)
+      mjtNum dvel[3];
+      mju_sub3(dvel, wvel+3, wvel);
+      mjtNum dot = mju_dot3(dpnt, dvel);
+      mju_addToScl3(dvel, dpnt, -dot);
+      mju_scl3(dvel, dvel, norm > mjMINVAL ? 1/norm : 0);
+
+      // TODO(tassa ) write sparse branch, requires mj_jacDotSparse
+      // if (mj_isSparse(m)) { ... }
+
+      // get endpoint JacobianDots, subtract
+      mj_jacDot(m, d, jac1, 0, wpnt, wbody[0]);
+      mj_jacDot(m, d, jac2, 0, wpnt+3, wbody[1]);
+      mju_sub(jacdif, jac2, jac1, 3*nv);
+
+      // chain rule, first term: Jdot += d/dt(jac2 - jac1) * dpnt
+      mju_mulMatTVec(tmp, jacdif, dpnt, 3, nv);
+
+      // add to existing
+      mju_addToScl(Jdot, tmp, 1/divisor, nv);
+
+      // get endpoint Jacobians, subtract
+      mj_jac(m, d, jac1, 0, wpnt, wbody[0]);
+      mj_jac(m, d, jac2, 0, wpnt+3, wbody[1]);
+      mju_sub(jacdif, jac2, jac1, 3*nv);
+
+      // chain rule, second term: Jdot += (jac2 - jac1) * d/dt(dpnt)
+      mju_mulMatTVec(tmp, jacdif, dvel, 3, nv);
+
+      // add to existing
+      mju_addToScl(Jdot, tmp, 1/divisor, nv);
+    }
+
+    // advance
+    j += (wraptype != mjWRAP_NONE ? 2 : 1);
   }
 
   mj_freeStack(d);
@@ -1333,6 +1469,63 @@ void mj_transmission(const mjModel* m, mjData* d) {
 
 //-------------------------- inertia ---------------------------------------------------------------
 
+// add tendon armature to qM
+void mj_tendonArmature(const mjModel* m, mjData* d) {
+  TM_START;
+  int nv = m->nv, ntendon = m->ntendon, issparse = mj_isSparse(m);
+
+  for (int k=0; k < ntendon; k++) {
+    mjtNum armature = m->tendon_armature[k];
+
+    if (!armature) {
+      continue;
+    }
+
+    // dense
+    if (!issparse) {
+      mjtNum* ten_J = d->ten_J + nv*k;
+      for (int i=0; i < m->nv; i++) {
+        int Madr = m->dof_Madr[i];
+        for (int j = i; j >= 0; j = m->dof_parentid[j]) {
+          d->qM[Madr++] += armature * ten_J[j] * ten_J[i];
+        }
+      }
+    }
+
+    // sparse
+    else {
+      // get sparse info for tendon k
+      int rowadr = d->ten_J_rowadr[k];
+      int rownnz = d->ten_J_rownnz[k];
+      const int* colind = d->ten_J_colind + rowadr;
+      mjtNum* ten_J = d->ten_J + rowadr;
+
+      // iterate forward on nonzero rows i
+      for (int adr_i=0; adr_i < rownnz; adr_i++) {
+        int i = colind[adr_i];
+        int Madr = m->dof_Madr[i];
+        int adr_j = rownnz - 1;
+
+        // iterate backward on ancestors of i, find matching column j
+        for (int j = i; j >= 0; j = m->dof_parentid[j]) {
+          // reduce adr_j until column index is no bigger than j
+          while (colind[adr_j] > j && adr_j >= 0) {
+            adr_j--;
+          }
+
+          // found match, update qM
+          if (colind[adr_j] == j) {
+            d->qM[Madr++] += armature * ten_J[adr_j] * ten_J[adr_i];
+          }
+        }
+      }
+    }
+  }
+  TM_END(mjTIMER_POS_INERTIA);
+}
+
+
+
 // composite rigid body inertia algorithm
 void mj_crb(const mjModel* m, mjData* d) {
   TM_START;
@@ -1387,7 +1580,9 @@ void mj_crb(const mjModel* m, mjData* d) {
 
 
 // sparse L'*D*L factorizaton of inertia-like matrix M, assumed spd
-void mj_factorI(const mjModel* m, mjData* d, const mjtNum* M, mjtNum* qLD, mjtNum* qLDiagInv) {
+// (legacy implementation)
+void mj_factorI_legacy(const mjModel* m, mjData* d, const mjtNum* M, mjtNum* qLD,
+                       mjtNum* qLDiagInv) {
   int cnt;
   int Madr_kk, Madr_ki;
   mjtNum tmp;
@@ -1451,16 +1646,19 @@ void mj_factorI(const mjModel* m, mjData* d, const mjtNum* M, mjtNum* qLD, mjtNu
 // sparse L'*D*L factorizaton of the inertia matrix M, assumed spd
 void mj_factorM(const mjModel* m, mjData* d) {
   TM_START;
-  mj_factorI(m, d, d->qM, d->qLD, d->qLDiagInv);
+
+  // gather LD <- M (legacy to CSR) and factorize in-place
+  mju_gather(d->qLD, d->qM, d->mapM2M, m->nM);
+  mj_factorI(d->qLD, d->qLDiagInv, m->nv, d->M_rownnz, d->M_rowadr, m->dof_simplenum, d->M_colind);
+
   TM_ADD(mjTIMER_POS_INERTIA);
 }
 
 
 
 // sparse L'*D*L factorizaton of inertia-like matrix M, assumed spd
-//  like mj_factorI, but using CSR representation
-void mj_factorIs(mjtNum* mat, mjtNum* diaginv, int nv,
-                 const int* rownnz, const int* rowadr, const int* diagnum, const int* colind) {
+void mj_factorI(mjtNum* mat, mjtNum* diaginv, int nv,
+                const int* rownnz, const int* rowadr, const int* diagnum, const int* colind) {
   // backward loop over rows
   for (int k=nv-1; k >= 0; k--) {
     // get row k's address, diagonal index, inverse diagonal value
@@ -1492,10 +1690,9 @@ void mj_factorIs(mjtNum* mat, mjtNum* diaginv, int nv,
 
 
 // in-place sparse backsubstitution:  x = inv(L'*D*L)*x
-//  L is in lower triangle of qLD; D is on diagonal of qLD
-//  handle n vectors at once
-void mj_solveLD(const mjModel* m, mjtNum* restrict x, int n,
-                const mjtNum* qLD, const mjtNum* qLDiagInv) {
+// (legacy implementation)
+void mj_solveLD_legacy(const mjModel* m, mjtNum* restrict x, int n,
+                       const mjtNum* qLD, const mjtNum* qLDiagInv) {
   // local copies of key variables
   int* dof_Madr = m->dof_Madr;
   int* dof_parentid = m->dof_parentid;
@@ -1606,9 +1803,8 @@ void mj_solveLD(const mjModel* m, mjtNum* restrict x, int n,
 
 
 // in-place sparse backsubstitution:  x = inv(L'*D*L)*x
-//  like mj_solveLD, but using the CSR representation of L
-void mj_solveLDs(mjtNum* restrict x, const mjtNum* qLDs, const mjtNum* qLDiagInv, int nv, int n,
-                 const int* rownnz, const int* rowadr, const int* diagnum, const int* colind) {
+void mj_solveLD(mjtNum* restrict x, const mjtNum* qLD, const mjtNum* qLDiagInv, int nv, int n,
+                const int* rownnz, const int* rowadr, const int* diagnum, const int* colind) {
   // x <- L^-T x
   for (int i=nv-1; i > 0; i--) {
     // skip diagonal rows
@@ -1623,7 +1819,7 @@ void mj_solveLDs(mjtNum* restrict x, const mjtNum* qLDs, const mjtNum* qLDiagInv
         int start = rowadr[i];
         int end = start + rownnz[i] - 1;
         for (int adr=start; adr < end; adr++) {
-          x[colind[adr]] -= qLDs[adr] * x_i;
+          x[colind[adr]] -= qLD[adr] * x_i;
         }
       }
     }
@@ -1636,7 +1832,7 @@ void mj_solveLDs(mjtNum* restrict x, const mjtNum* qLDs, const mjtNum* qLDiagInv
         mjtNum x_i;
         if ((x_i = x[i+offset])) {
           for (int adr=start; adr < end; adr++) {
-            x[offset + colind[adr]] -= qLDs[adr] * x_i;
+            x[offset + colind[adr]] -= qLD[adr] * x_i;
           }
         }
       }
@@ -1668,18 +1864,19 @@ void mj_solveLDs(mjtNum* restrict x, const mjtNum* qLDs, const mjtNum* qLDiagInv
       continue;
     }
 
-    int adr = rowadr[i];
-    int d = rownnz[i] - 1;
-    if (d > 0) {
+    int d;
+    if ((d = rownnz[i] - 1) > 0) {
+      int adr = rowadr[i];
+
       // one vector
       if (n == 1) {
-        x[i] -= mju_dotSparse(qLDs+adr, x, d, colind+adr, /*flg_unc1=*/0);
+        x[i] -= mju_dotSparse(qLD+adr, x, d, colind+adr, /*flg_unc1=*/0);
       }
 
       // multiple vectors
       else {
         for (int offset=0; offset < n*nv; offset+=nv) {
-          x[i+offset] -= mju_dotSparse(qLDs+adr, x+offset, d, colind+adr, /*flg_unc1=*/0);
+          x[i+offset] -= mju_dotSparse(qLD+adr, x+offset, d, colind+adr, /*flg_unc1=*/0);
         }
       }
     }
@@ -1694,73 +1891,8 @@ void mj_solveM(const mjModel* m, mjData* d, mjtNum* x, const mjtNum* y, int n) {
   if (x != y) {
     mju_copy(x, y, n*m->nv);
   }
-  mj_solveLD(m, x, n, d->qLD, d->qLDiagInv);
-}
-
-
-// in-place sparse backsubstitution for one island:  x = inv(L'*D*L)*x
-//  L is in lower triangle of qLD; D is on diagonal of qLD
-void mj_solveM_island(const mjModel* m, const mjData* d, mjtNum* restrict x, int island) {
-  // if no islands, call mj_solveLD
-  const mjtNum* qLD = d->qLD;
-  const mjtNum* qLDiagInv = d->qLDiagInv;
-  if (island < 0) {
-    mj_solveLD(m, x, 1, qLD, qLDiagInv);
-    return;
-  }
-
-  // local constants: general
-  const int* Madr = m->dof_Madr;
-  const int* parentid = m->dof_parentid;
-  const int* simplenum = m->dof_simplenum;
-
-  // local constants: island specific
-  int ndof = d->island_dofnum[island];
-  const int* dofind = d->island_dofind + d->island_dofadr[island];
-  const int* islandind = d->dof_islandind;
-
-  // x <- inv(L') * x; skip simple, exploit sparsity of input vector
-  for (int k=ndof-1; k >= 0; k--) {
-    int i = dofind[k];
-    if (!simplenum[i] && x[k]) {
-      // init
-      int Madr_ij = Madr[i]+1;
-      int j = parentid[i];
-
-      // traverse ancestors backwards
-      // read directly from x[l] since j cannot be a parent of itself
-      while (j >= 0) {
-        x[islandind[j]] -= qLD[Madr_ij++]*x[k];         // x(j) -= L(i,j) * x(i)
-
-        // advance to parent
-        j = parentid[j];
-      }
-    }
-  }
-
-  // x <- inv(D) * x
-  for (int k=ndof-1; k >= 0; k--) {
-    x[k] *= qLDiagInv[dofind[k]];  // x(i) /= L(i,i)
-  }
-
-  // x <- inv(L) * x; skip simple
-  for (int k=0; k < ndof; k++) {
-    int i = dofind[k];
-    if (!simplenum[i]) {
-      // init
-      int Madr_ij = Madr[i]+1;
-      int j = parentid[i];
-
-      // traverse ancestors backwards
-      // write directly in x[i] since i cannot be a parent of itself
-      while (j >= 0) {
-        x[k] -= qLD[Madr_ij++]*x[islandind[j]];             // x(i) -= L(i,j) * x(j)
-
-        // advance to parent
-        j = parentid[j];
-      }
-    }
-  }
+  mj_solveLD(x, d->qLD, d->qLDiagInv, m->nv, n,
+             d->M_rownnz, d->M_rowadr, m->dof_simplenum, d->M_colind);
 }
 
 
@@ -1768,40 +1900,45 @@ void mj_solveM_island(const mjModel* m, const mjData* d, mjtNum* restrict x, int
 // half of sparse backsubstitution:  x = sqrt(inv(D))*inv(L')*y
 void mj_solveM2(const mjModel* m, mjData* d, mjtNum* x, const mjtNum* y,
                 const mjtNum* sqrtInvD, int n) {
-  // local copies of key variables
-  mjtNum* qLD = d->qLD;
-  int* dof_Madr = m->dof_Madr;
-  int* dof_parentid = m->dof_parentid;
   int nv = m->nv;
+
+  // local copies of key variables
+  const int* rownnz = d->M_rownnz;
+  const int* rowadr = d->M_rowadr;
+  const int* colind = d->M_colind;
+  const int* diagnum = m->dof_simplenum;
+  const mjtNum* qLD = d->qLD;
 
   // x = y
   mju_copy(x, y, n * nv);
 
-  // loop over the n input vectors
-  for (int ivec=0; ivec < n; ivec++) {
-    int offset = ivec*nv;
+  // x <- L^-T x
+  for (int i=nv-1; i > 0; i--) {
+    // skip diagonal rows
+    if (diagnum[i]) {
+      continue;
+    }
 
-    // x <- inv(L') * x; skip simple, exploit sparsity of input vector
-    for (int i=nv-1; i >= 0; i--) {
-      mjtNum tmp;
-      if (!m->dof_simplenum[i] && (tmp = x[i+offset])) {
-        // init
-        int Madr_ij = dof_Madr[i]+1;
-        int j = dof_parentid[i];
+    // prepare row i column address range
+    int start = rowadr[i];
+    int end = start + rownnz[i] - 1;
 
-        // traverse ancestors backwards
-        while (j >= 0) {
-          x[j+offset] -= qLD[Madr_ij++] * tmp;        // x(j) -= L(i,j) * x(i)
-
-          // advance to parent
-          j = dof_parentid[j];
+    // process all vectors
+    for (int offset=0; offset < n*nv; offset+=nv) {
+      mjtNum x_i;
+      if ((x_i = x[i+offset])) {
+        for (int adr=start; adr < end; adr++) {
+          x[offset + colind[adr]] -= qLD[adr] * x_i;
         }
       }
     }
+  }
 
-    // x <- sqrt(inv(D)) * x
-    for (int i=0; i < nv; i++) {
-      x[i+offset] *= sqrtInvD[i];  // x(i) /= sqrt(L(i,i))
+  // x <- D^-1/2 x
+  for (int i=0; i < nv; i++) {
+    mjtNum invD_i = sqrtInvD[i];
+    for (int offset=0; offset < n*nv; offset+=nv) {
+      x[i+offset] *= invD_i;
     }
   }
 }
@@ -1874,7 +2011,7 @@ void mj_comVel(const mjModel* m, mjData* d) {
 
     // assign cvel, cdofdot
     mju_copy(d->cvel+6*i, cvel, 6);
-    mju_copy(d->cdof_dot+6*bda, cdofdot, 6*m->body_dofnum[i]);
+    mju_copy(d->cdof_dot+6*bda, cdofdot, 6*dofnum);
   }
 }
 
@@ -2180,4 +2317,54 @@ void mj_rnePostConstraint(const mjModel* m, mjData* d) {
   for (int j=nbody-1; j > 0; j--) {
     mju_addTo(d->cfrc_int+6*m->body_parentid[j], d->cfrc_int+6*j, 6);
   }
+}
+
+
+
+// add bias force due to tendon armature
+void mj_tendonBias(const mjModel* m, mjData* d, mjtNum* qfrc) {
+  int ntendon = m->ntendon, nv = m->nv, issparse = mj_isSparse(m);
+  mjtNum* ten_Jdot = NULL;
+  mj_markStack(d);
+
+  // add bias term due to tendon armature
+  for (int i=0; i < ntendon; i++) {
+    mjtNum armature = m->tendon_armature[i];
+
+    // no armature: skip
+    if (!armature) {
+      continue;
+    }
+
+    // allocate if required
+    if (!ten_Jdot) {
+      ten_Jdot = mjSTACKALLOC(d, nv, mjtNum);
+    }
+
+    // get dense d/dt(tendon Jacobian) for tendon i
+    mj_tendonDot(m, d, i, ten_Jdot);
+
+    // add bias term:  qfrc += ten_J * armature * dot(ten_Jdot, qvel)
+    mjtNum coef = armature * mju_dot(ten_Jdot, d->qvel, nv);
+
+    if (coef) {
+      // dense
+      if (!issparse) {
+        mju_addToScl(qfrc, d->ten_J + nv*i, coef, nv);
+      }
+
+      // sparse
+      else {
+        int nnz = d->ten_J_rownnz[i];
+        int adr = d->ten_J_rowadr[i];
+        const int* colind = d->ten_J_colind + adr;
+        const mjtNum* ten_J = d->ten_J + adr;
+        for (int j=0; j < nnz; j++) {
+          qfrc[colind[j]] += coef * ten_J[j];
+        }
+      }
+    }
+  }
+
+  mj_freeStack(d);
 }

@@ -40,6 +40,15 @@ typedef enum _mjtFcompType {
 } mjtFcompType;
 
 
+typedef enum _mjtDof {
+  mjFCOMPDOF_FULL = 0,
+  mjFCOMPDOF_RADIAL,
+  mjFCOMPDOF_TRILINEAR,
+
+  mjNFCOMPDOFS
+} mjtDof;
+
+
 class mjCFlexcomp {
  public:
   mjCFlexcomp(void);
@@ -73,6 +82,7 @@ class mjCFlexcomp {
   double inertiabox;              // size of inertia box for each body
   bool equality;                  // create edge equality constraint
   std::string file;               // mesh/gmsh file name
+  mjtDof doftype;                 // dof type, all vertices or trilinear interpolation
 
   // pin specifications
   std::vector<int> pinid;         // ids of points to pin
@@ -96,6 +106,7 @@ class mjCFlexcomp {
   std::vector<bool> used;         // is point used by any element (false: skip)
   std::vector<int> element;       // flex elements
   std::vector<float> texcoord;    // vertex texture coordinates
+  std::vector<int> elemtexcoord;  // face texture coordinates (OBJ only)
 
   // plugin support
   std::string plugin_name;

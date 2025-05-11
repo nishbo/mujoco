@@ -81,6 +81,7 @@
     XMJV( ncam )               \
     XMJV( nlight )             \
     XMJV( nflex )              \
+    X   ( nflexnode )          \
     XMJV( nflexvert )          \
     X   ( nflexedge )          \
     X   ( nflexelem )          \
@@ -95,6 +96,9 @@
     X   ( nmeshtexcoord )      \
     X   ( nmeshface )          \
     X   ( nmeshgraph )         \
+    X   ( nmeshpoly )          \
+    X   ( nmeshpolyvert )      \
+    X   ( nmeshpolymap )       \
     XMJV( nskin )              \
     XMJV( nskinvert )          \
     X   ( nskintexvert )       \
@@ -326,6 +330,9 @@
     XMJV( int,     flex_dim,              nflex,         1                    ) \
     XMJV( int,     flex_matid,            nflex,         1                    ) \
     XMJV( int,     flex_group,            nflex,         1                    ) \
+    XMJV( int,     flex_interp,           nflex,         1                    ) \
+    XMJV( int,     flex_nodeadr,          nflex,         1                    ) \
+    XMJV( int,     flex_nodenum,          nflex,         1                    ) \
     XMJV( int,     flex_vertadr,          nflex,         1                    ) \
     XMJV( int,     flex_vertnum,          nflex,         1                    ) \
     X   ( int,     flex_edgeadr,          nflex,         1                    ) \
@@ -339,15 +346,19 @@
     X   ( int,     flex_evpairadr,        nflex,         1                    ) \
     X   ( int,     flex_evpairnum,        nflex,         1                    ) \
     XMJV( int,     flex_texcoordadr,      nflex,         1                    ) \
+    XMJV( int,     flex_nodebodyid,       nflexnode,     1                    ) \
     X   ( int,     flex_vertbodyid,       nflexvert,     1                    ) \
     X   ( int,     flex_edge,             nflexedge,     2                    ) \
     XMJV( int,     flex_elem,             nflexelemdata, 1                    ) \
+    XMJV( int,     flex_elemtexcoord,     nflexelemdata, 1                    ) \
     X   ( int,     flex_elemedge,         nflexelemedge, 1                    ) \
     XMJV( int,     flex_elemlayer,        nflexelem,     1                    ) \
     XMJV( int,     flex_shell,            nflexshelldata,1                    ) \
     X   ( int,     flex_evpair,           nflexevpair,   2                    ) \
     X   ( mjtNum,  flex_vert,             nflexvert,     3                    ) \
     X   ( mjtNum,  flex_vert0,            nflexvert,     3                    ) \
+    XMJV( mjtNum,  flex_node,             nflexnode,     3                    ) \
+    X   ( mjtNum,  flex_node0,            nflexnode,     3                    ) \
     X   ( mjtNum,  flexedge_length0,      nflexedge,     1                    ) \
     X   ( mjtNum,  flexedge_invweight0,   nflexedge,     1                    ) \
     XMJV( mjtNum,  flex_radius,           nflex,         1                    ) \
@@ -358,12 +369,12 @@
     X   ( mjtByte, flex_edgeequality,     nflex,         1                    ) \
     X   ( mjtByte, flex_rigid,            nflex,         1                    ) \
     X   ( mjtByte, flexedge_rigid,        nflexedge,     1                    ) \
-    X   ( mjtByte, flex_centered,         nflex,         1                    ) \
+    XMJV( mjtByte, flex_centered,         nflex,         1                    ) \
     XMJV( mjtByte, flex_flatskin,         nflex,         1                    ) \
     XMJV( int,     flex_bvhadr,           nflex,         1                    ) \
     XMJV( int,     flex_bvhnum,           nflex,         1                    ) \
     XMJV( float,   flex_rgba,             nflex,         4                    ) \
-    X   ( float,   flex_texcoord,         nflextexcoord, 2                    ) \
+    XMJV( float,   flex_texcoord,         nflextexcoord, 2                    ) \
     X   ( int,     mesh_vertadr,          nmesh,         1                    ) \
     X   ( int,     mesh_vertnum,          nmesh,         1                    ) \
     X   ( int,     mesh_normaladr,        nmesh,         1                    ) \
@@ -386,6 +397,15 @@
     XNV ( int,     mesh_facetexcoord,     nmeshface,     3                    ) \
     XNV ( int,     mesh_graph,            nmeshgraph,    1                    ) \
     XMJV( int,     mesh_pathadr,          nmesh,         1                    ) \
+    X   ( int,     mesh_polynum,          nmesh,         1                    ) \
+    X   ( int,     mesh_polyadr,          nmesh,         1                    ) \
+    X   ( mjtNum,  mesh_polynormal,       nmeshpoly,     3                    ) \
+    X   ( int,     mesh_polyvertadr,      nmeshpoly,     1                    ) \
+    X   ( int,     mesh_polyvertnum,      nmeshpoly,     1                    ) \
+    X   ( int,     mesh_polyvert,         nmeshpolyvert, 1                    ) \
+    X   ( int,     mesh_polymapadr,       nmeshvert,     1                    ) \
+    X   ( int,     mesh_polymapnum,       nmeshvert,     1                    ) \
+    X   ( int,     mesh_polymap,          nmeshpolymap,  1                    ) \
     XMJV( int,     skin_matid,            nskin,         1                    ) \
     XMJV( int,     skin_group,            nskin,         1                    ) \
     XMJV( float,   skin_rgba,             nskin,         4                    ) \
@@ -455,15 +475,18 @@
     XMJV( int,     tendon_matid,          ntendon,       1                    ) \
     XMJV( int,     tendon_group,          ntendon,       1                    ) \
     XMJV( mjtByte, tendon_limited,        ntendon,       1                    ) \
+    XMJV( mjtByte, tendon_actfrclimited,  ntendon,       1                    ) \
     XMJV( mjtNum,  tendon_width,          ntendon,       1                    ) \
     X   ( mjtNum,  tendon_solref_lim,     ntendon,       mjNREF               ) \
     X   ( mjtNum,  tendon_solimp_lim,     ntendon,       mjNIMP               ) \
     X   ( mjtNum,  tendon_solref_fri,     ntendon,       mjNREF               ) \
     X   ( mjtNum,  tendon_solimp_fri,     ntendon,       mjNIMP               ) \
     XMJV( mjtNum,  tendon_range,          ntendon,       2                    ) \
+    XMJV( mjtNum,  tendon_actfrcrange,    ntendon,       2                    ) \
     X   ( mjtNum,  tendon_margin,         ntendon,       1                    ) \
     XMJV( mjtNum,  tendon_stiffness,      ntendon,       1                    ) \
     XMJV( mjtNum,  tendon_damping,        ntendon,       1                    ) \
+    X   ( mjtNum,  tendon_armature,       ntendon,       1                    ) \
     XMJV( mjtNum,  tendon_frictionloss,   ntendon,       1                    ) \
     XMJV( mjtNum,  tendon_lengthspring,   ntendon,       2                    ) \
     X   ( mjtNum,  tendon_length0,        ntendon,       1                    ) \
@@ -652,6 +675,10 @@
     X   ( int,       B_rownnz,          nbody,       1           ) \
     X   ( int,       B_rowadr,          nbody,       1           ) \
     X   ( int,       B_colind,          nB,          1           ) \
+    X   ( int,       M_rownnz,          nv,          1           ) \
+    X   ( int,       M_rowadr,          nv,          1           ) \
+    X   ( int,       M_colind,          nM,          1           ) \
+    X   ( int,       mapM2M,            nM,          1           ) \
     X   ( int,       C_rownnz,          nv,          1           ) \
     X   ( int,       C_rowadr,          nv,          1           ) \
     X   ( int,       C_colind,          nC,          1           ) \
@@ -712,23 +739,56 @@
     X( int,      efc_state,         MJ_D(nefc),    1 )
 
 // array fields of mjData that are used in the dual problem
-#define MJDATA_ARENA_POINTERS_DUAL                           \
-    X( int,      efc_AR_rownnz,     MJ_D(nefc), 1          ) \
-    X( int,      efc_AR_rowadr,     MJ_D(nefc), 1          ) \
-    X( int,      efc_AR_colind,     MJ_D(nA),   1          ) \
-    X( mjtNum,   efc_AR,            MJ_D(nA),   1          )
+#define MJDATA_ARENA_POINTERS_DUAL                    \
+    X( int,      efc_AR_rownnz,     MJ_D(nefc), 1   ) \
+    X( int,      efc_AR_rowadr,     MJ_D(nefc), 1   ) \
+    X( int,      efc_AR_colind,     MJ_D(nA),   1   ) \
+    X( mjtNum,   efc_AR,            MJ_D(nA),   1   )
 
 // array fields of mjData that are used for constraint islands
-#define MJDATA_ARENA_POINTERS_ISLAND                 \
-    X( int,   dof_island,         MJ_M(nv),      1 ) \
-    X( int,   island_dofnum,      MJ_D(nisland), 1 ) \
-    X( int,   island_dofadr,      MJ_D(nisland), 1 ) \
-    X( int,   island_dofind,      MJ_M(nv),      1 ) \
-    X( int,   dof_islandind,      MJ_M(nv),      1 ) \
-    X( int,   efc_island,         MJ_D(nefc),    1 ) \
-    X( int,   island_efcnum,      MJ_D(nisland), 1 ) \
-    X( int,   island_efcadr,      MJ_D(nisland), 1 ) \
-    X( int,   island_efcind,      MJ_D(nefc),    1 )
+#define MJDATA_ARENA_POINTERS_ISLAND                   \
+    X( int,     dof_island,        MJ_M(nv),       1 ) \
+    X( int,     island_nv,         MJ_D(nisland),  1 ) \
+    X( int,     island_idofadr,    MJ_D(nisland),  1 ) \
+    X( int,     island_dofadr,     MJ_D(nisland),  1 ) \
+    X( int,     map_dof2idof,      MJ_M(nv),       1 ) \
+    X( int,     map_idof2dof,      MJ_M(nv),       1 ) \
+    X( mjtNum,  ifrc_smooth,       MJ_D(nidof),    1 ) \
+    X( mjtNum,  iacc_smooth,       MJ_D(nidof),    1 ) \
+    X( int,     iM_rownnz,         MJ_D(nidof),    1 ) \
+    X( int,     iM_rowadr,         MJ_D(nidof),    1 ) \
+    X( int,     iM_diagnum,        MJ_D(nidof),    1 ) \
+    X( int,     iM_colind,         MJ_M(nM),       1 ) \
+    X( mjtNum,  iM,                MJ_M(nM),       1 ) \
+    X( mjtNum,  iLD,               MJ_M(nM),       1 ) \
+    X( mjtNum,  iLDiagInv,         MJ_D(nidof),    1 ) \
+    X( mjtNum,  iacc,              MJ_D(nidof),    1 ) \
+    X( int,     efc_island,        MJ_D(nefc),     1 ) \
+    X( int,     island_ne,         MJ_D(nisland),  1 ) \
+    X( int,     island_nf,         MJ_D(nisland),  1 ) \
+    X( int,     island_nefc,       MJ_D(nisland),  1 ) \
+    X( int,     island_iefcadr,    MJ_D(nisland),  1 ) \
+    X( int,     map_efc2iefc,      MJ_D(nefc),     1 ) \
+    X( int,     map_iefc2efc,      MJ_D(nefc),     1 ) \
+    X( int,     iefc_type,         MJ_D(nefc),     1 ) \
+    X( int,     iefc_id,           MJ_D(nefc),     1 ) \
+    X( int,     iefc_J_rownnz,     MJ_D(nefc),     1 ) \
+    X( int,     iefc_J_rowadr,     MJ_D(nefc),     1 ) \
+    X( int,     iefc_J_rowsuper,   MJ_D(nefc),     1 ) \
+    X( int,     iefc_J_colind,     MJ_D(nJ),       1 ) \
+    X( int,     iefc_JT_rownnz,    MJ_D(nidof),    1 ) \
+    X( int,     iefc_JT_rowadr,    MJ_D(nidof),    1 ) \
+    X( int,     iefc_JT_rowsuper,  MJ_D(nidof),    1 ) \
+    X( int,     iefc_JT_colind,    MJ_D(nJ),       1 ) \
+    X( mjtNum,  iefc_J,            MJ_D(nJ),       1 ) \
+    X( mjtNum,  iefc_JT,           MJ_D(nJ),       1 ) \
+    X( mjtNum,  iefc_frictionloss, MJ_D(nefc),     1 ) \
+    X( mjtNum,  iefc_D,            MJ_D(nefc),     1 ) \
+    X( mjtNum,  iefc_R,            MJ_D(nefc),     1 ) \
+    X( mjtNum,  iefc_aref,         MJ_D(nefc),     1 ) \
+    X( int,     iefc_state,        MJ_D(nefc),     1 ) \
+    X( mjtNum,  iefc_force,        MJ_D(nefc),     1 ) \
+    X( mjtNum,  ifrc_constraint,   MJ_D(nidof),    1 )
 
 // array fields of mjData that live in d->arena
 #define MJDATA_ARENA_POINTERS          \
@@ -750,7 +810,6 @@
     X( size_t,    maxuse_arena       ) \
     X( int,       maxuse_con         ) \
     X( int,       maxuse_efc         ) \
-    X( int,       solver_nisland     ) \
     X( int,       ncon               ) \
     X( int,       ne                 ) \
     X( int,       nf                 ) \
@@ -759,6 +818,7 @@
     X( int,       nJ                 ) \
     X( int,       nA                 ) \
     X( int,       nisland            ) \
+    X( int,       nidof              ) \
     X( mjtNum,    time               ) \
     X( uintptr_t, threadpool         )
 

@@ -91,9 +91,9 @@ static void makeLabel(const mjModel* m, mjtObj type, int id, char* label) {
 
 // assign pseudo-random rgba to constraint island using Halton sequence
 static void islandColor(float rgba[4], int islanddofadr) {
-  rgba[0] = 0.1f + 0.8f*mju_Halton(islanddofadr + 1, 2);
-  rgba[1] = 0.1f + 0.8f*mju_Halton(islanddofadr + 1, 3);
-  rgba[2] = 0.1f + 0.8f*mju_Halton(islanddofadr + 1, 5);
+  rgba[0] = 0.1f + 0.9f*mju_Halton(islanddofadr + 1, 2);
+  rgba[1] = 0.1f + 0.9f*mju_Halton(islanddofadr + 1, 3);
+  rgba[2] = 0.1f + 0.9f*mju_Halton(islanddofadr + 1, 5);
   rgba[3] = 1;
 }
 
@@ -152,7 +152,7 @@ static void addContactGeom(const mjModel* m, mjData* d, const mjtByte* flags,
       // override standard colors if visualizing islands
       if (vopt->flags[mjVIS_ISLAND] && d->nisland && efc_adr >= 0) {
         // set color using island's first dof
-        islandColor(thisgeom->rgba, d->island_dofind[d->island_dofadr[d->efc_island[efc_adr]]]);
+        islandColor(thisgeom->rgba, d->island_dofadr[d->efc_island[efc_adr]]);
       }
 
       // otherwise regular colors (different for included and excluded contacts)
@@ -711,6 +711,47 @@ void mjv_addGeoms(const mjModel* m, mjData* d, const mjvOption* vopt,
           START
           mjv_initGeom(thisgeom, mjGEOM_LINEBOX, aabb+3, aabb, NULL, rgba);
           FINISH
+        }
+      }
+
+      if (!m->flex_interp[f]) {
+        continue;
+      }
+
+      // control points box
+      mjtNum xpos[mjMAXFLEXNODES];
+      int nstart = m->flex_nodeadr[f];
+      int* bodyid = m->flex_nodebodyid + m->flex_nodeadr[f];
+      if (m->flex_centered[f]) {
+        for (int i=0; i < m->flex_nodenum[f]; i++) {
+          mju_copy3(xpos + 3*i, d->xpos + 3*bodyid[i]);
+        }
+      } else {
+        for (int i=0; i < m->flex_nodenum[f]; i++) {
+          mju_mulMatVec3(xpos + 3*i, d->xmat + 9*bodyid[i], m->flex_node + 3*(i+nstart));
+          mju_addTo3(xpos + 3*i, d->xpos + 3*bodyid[i]);
+        }
+      }
+      for (int i=0; i < 2; i++) {
+        for (int j=0; j < 2; j++) {
+          for (int k=0; k < 2; k++) {
+            if (scn->ngeom >= scn->maxgeom) break;
+            if (i == 0) {
+              START
+              mjv_connector(thisgeom, mjGEOM_LINE, 3, xpos+3*(4*i+2*j+k), xpos+3*(4*(i+1)+2*j+k));
+              FINISH
+            }
+            if (j == 0) {
+              START
+              mjv_connector(thisgeom, mjGEOM_LINE, 3, xpos+3*(4*i+2*j+k), xpos+3*(4*i+2*(j+1)+k));
+              FINISH
+            }
+            if (k == 0) {
+              START
+              mjv_connector(thisgeom, mjGEOM_LINE, 3, xpos+3*(4*i+2*j+k), xpos+3*(4*i+2*j+(k+1)));
+              FINISH
+            }
+          }
         }
       }
     }
@@ -1303,7 +1344,7 @@ void mjv_addGeoms(const mjModel* m, mjData* d, const mjvOption* vopt,
           int island = d->dof_island[m->body_dofadr[weld_id]];
           if (island > -1) {
             // color using island's first dof
-            islandColor(rgba_island, d->island_dofind[d->island_dofadr[island]]);
+            islandColor(rgba_island, d->island_dofadr[island]);
           }
         }
       }
@@ -1794,7 +1835,7 @@ void mjv_addGeoms(const mjModel* m, mjData* d, const mjvOption* vopt,
                 if (d->tendon_efcadr[i] != -1) {
                   // set color using island's first dof
                   int island = d->efc_island[d->tendon_efcadr[i]];
-                  islandColor(rgba_island, d->island_dofind[d->island_dofadr[island]]);
+                  islandColor(rgba_island, d->island_dofadr[island]);
                 }
               }
               setMaterial(m, thisgeom, tendon_matid, rgba, vopt->flags);
@@ -2486,15 +2527,16 @@ void mjv_updateActiveFlex(const mjModel* m, mjData* d, mjvScene* scn, const mjvO
         if (dim == 2 || m->flex_elemlayer[m->flex_elemadr[f]+e] == opt->flex_layer) {
           // get element data
           const int* edata = m->flex_elem + m->flex_elemdataadr[f] + e*(dim+1);
+          const int* tdata = m->flex_elemtexcoord + m->flex_elemdataadr[f] + e*(dim+1);
 
           // triangles: two faces per element
           if (dim == 2) {
             makeFace(face, normal, radius, vertxpos, nface, edata[0], edata[1], edata[2]);
-            copyTex(texdst, texsrc, nface, edata[0], edata[1], edata[2]);
+            copyTex(texdst, texsrc, nface, tdata[0], tdata[1], tdata[2]);
             nface++;
 
             makeFace(face, normal, radius, vertxpos, nface, edata[0], edata[2], edata[1]);
-            copyTex(texdst, texsrc, nface, edata[0], edata[2], edata[1]);
+            copyTex(texdst, texsrc, nface, tdata[0], tdata[2], tdata[1]);
             nface++;
           }
 
@@ -2502,22 +2544,22 @@ void mjv_updateActiveFlex(const mjModel* m, mjData* d, mjvScene* scn, const mjvO
           else {
             makeFace(face, normal, radius, vertxpos,
                      nface, edata[0], edata[1], edata[2]);
-            copyTex(texdst, texsrc, nface, edata[0], edata[1], edata[2]);
+            copyTex(texdst, texsrc, nface, tdata[0], tdata[1], tdata[2]);
             nface++;
 
             makeFace(face, normal, radius, vertxpos,
                      nface, edata[0], edata[2], edata[3]);
-            copyTex(texdst, texsrc, nface, edata[0], edata[2], edata[3]);
+            copyTex(texdst, texsrc, nface, tdata[0], tdata[2], tdata[3]);
             nface++;
 
             makeFace(face, normal, radius, vertxpos,
                      nface, edata[0], edata[3], edata[1]);
-            copyTex(texdst, texsrc, nface, edata[0], edata[3], edata[1]);
+            copyTex(texdst, texsrc, nface, tdata[0], tdata[3], tdata[1]);
             nface++;
 
             makeFace(face, normal, radius, vertxpos,
                      nface, edata[1], edata[3], edata[2]);
-            copyTex(texdst, texsrc, nface, edata[1], edata[3], edata[2]);
+            copyTex(texdst, texsrc, nface, tdata[1], tdata[3], tdata[2]);
             nface++;
           }
         }
@@ -2557,13 +2599,14 @@ void mjv_updateActiveFlex(const mjModel* m, mjData* d, mjvScene* scn, const mjvO
       if (dim == 2) {
         for (int e=0; e < m->flex_elemnum[f]; e++) {
           const int* edata = m->flex_elem + m->flex_elemdataadr[f] + e*(dim+1);
+          const int* tdata = m->flex_elemtexcoord + m->flex_elemdataadr[f] + e*(dim+1);
           makeSmooth(face, normal, radius, flg_flat, vertnorm, vertxpos,
                      nface, edata[0], edata[1], edata[2]);
-          copyTex(texdst, texsrc, nface, edata[0], edata[1], edata[2]);
+          copyTex(texdst, texsrc, nface, tdata[0], tdata[1], tdata[2]);
           nface++;
           makeSmooth(face, normal, -radius, flg_flat, vertnorm, vertxpos,
                      nface, edata[0], edata[2], edata[1]);
-          copyTex(texdst, texsrc, nface, edata[0], edata[2], edata[1]);
+          copyTex(texdst, texsrc, nface, tdata[0], tdata[2], tdata[1]);
           nface++;
         }
       } else {

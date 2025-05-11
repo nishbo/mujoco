@@ -46,6 +46,8 @@ static const char* const kDampedActuatorsPath =
     "engine/testdata/derivative/damped_actuators.xml";
 static const char* const kJointForceClamp =
     "engine/testdata/actuation/joint_force_clamp.xml";
+static const char* const kTendonForceClamp =
+    "engine/testdata/actuation/tendon_force_clamp.xml";
 
 using ::testing::Pointwise;
 using ::testing::DoubleNear;
@@ -158,6 +160,47 @@ TEST_F(ForwardTest, DamperDampens) {
     mj_step(model, data);
 
   EXPECT_LE(data->qvel[0], std::numeric_limits<double>::epsilon());
+  mj_deleteData(data);
+  mj_deleteModel(model);
+}
+
+static const char* const kArmatureEquivalencePath =
+    "engine/testdata/armature_equivalence.xml";
+
+// test that adding joint armature is equivalent to a coupled rotating mass with
+// a gear ratio enforced by an equality
+TEST_F(ForwardTest, ArmatureEquivalence) {
+  const std::string xml_path = GetTestDataFilePath(kArmatureEquivalencePath);
+  char error[1000];
+  mjModel* model = mj_loadXML(xml_path.c_str(), nullptr, error, sizeof(error));
+  ASSERT_THAT(model, NotNull()) << error;
+  mjData* data = mj_makeData(model);
+
+  // with actuators
+  mjtNum qpos_mse = 0;
+  int nstep = 0;
+  while (data->time < 4) {
+    data->ctrl[0] = data->ctrl[1] = mju_sin(2*data->time);
+    mj_step(model, data);
+    nstep++;
+    mjtNum err = data->qpos[0] - data->qpos[2];
+    qpos_mse += err * err;
+  }
+  EXPECT_LT(mju_sqrt(qpos_mse/nstep), 1e-3);
+
+  // no actuators
+  model->opt.disableflags |= mjDSBL_ACTUATION;
+  qpos_mse = 0;
+  nstep = 0;
+  mj_resetData(model, data);
+  while (data->time < 4) {
+    mj_step(model, data);
+    nstep++;
+    mjtNum err = data->qpos[0] - data->qpos[2];
+    qpos_mse += err * err;
+  }
+  EXPECT_LT(mju_sqrt(qpos_mse/nstep), 1e-3);
+
   mj_deleteData(data);
   mj_deleteModel(model);
 }
@@ -1347,6 +1390,58 @@ TEST_F(ActuatorTest, DisableActuatorOutOfRange) {
   model->opt.disableactuator = ~0;
   mj_forward(model, data);
   EXPECT_EQ(data->qfrc_actuator[0], 30.0);
+
+  mj_deleteData(data);
+  mj_deleteModel(model);
+}
+
+TEST_F(ActuatorTest, TendonActuatorForceRange) {
+  const std::string xml_path = GetTestDataFilePath(kTendonForceClamp);
+  mjModel* model = mj_loadXML(xml_path.c_str(), nullptr, nullptr, 0);
+  mjData* data = mj_makeData(model);
+
+  EXPECT_EQ(model->tendon_actfrclimited[0], 0);
+  EXPECT_EQ(model->tendon_actfrcrange[0], 0);
+  EXPECT_EQ(model->tendon_actfrcrange[1], 0);
+
+  EXPECT_EQ(model->tendon_actfrclimited[1], 1);
+  EXPECT_EQ(model->tendon_actfrcrange[2], -1);
+  EXPECT_EQ(model->tendon_actfrcrange[3], 1);
+
+  EXPECT_EQ(model->tendon_actfrclimited[2], 1);
+  EXPECT_EQ(model->tendon_actfrcrange[4], -10);
+  EXPECT_EQ(model->tendon_actfrcrange[5], 10);
+
+  EXPECT_EQ(model->tendon_actfrclimited[3], 1);
+  EXPECT_EQ(model->tendon_actfrcrange[6], 0);
+  EXPECT_EQ(model->tendon_actfrcrange[7], 1);
+
+  data->ctrl[0] = 1;
+  data->ctrl[1] = 1;
+  data->ctrl[2] = 1;
+
+  data->ctrl[3] = -1;
+  data->ctrl[4] = 1;
+
+  data->ctrl[5] = -20;
+  data->ctrl[6] = 5;
+  data->ctrl[7] = -5;
+
+  mj_forward(model, data);
+
+  EXPECT_NEAR(data->actuator_force[0], 1, 1e-6);
+  EXPECT_NEAR(data->actuator_force[1], 1, 1e-6);
+  EXPECT_NEAR(data->actuator_force[2], 1, 1e-6);
+  EXPECT_NEAR(data->actuator_force[3], -1, 1e-6);
+  EXPECT_NEAR(data->actuator_force[4], 1, 1e-6);
+  EXPECT_NEAR(data->actuator_force[5], -10, 1e-6);
+  EXPECT_NEAR(data->actuator_force[6], 5, 1e-6);
+  EXPECT_NEAR(data->actuator_force[7], -5, 1e-6);
+
+  EXPECT_EQ(data->sensordata[0], 3);
+  EXPECT_EQ(data->sensordata[1], 0);
+  EXPECT_EQ(data->sensordata[2], -10);
+  EXPECT_EQ(data->sensordata[3], 0);
 
   mj_deleteData(data);
   mj_deleteModel(model);

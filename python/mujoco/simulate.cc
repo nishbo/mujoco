@@ -13,21 +13,27 @@
 // limitations under the License.
 
 #include <atomic>
-#include <chrono>
+#include <chrono>  // NOLINT(build/c++11)
 #include <cstring>
 #include <memory>
+#include <stdexcept>
 #include <string>
-#include <thread>
+#include <thread>  // NOLINT(build/c++11)
+#include <tuple>
 #include <utility>
+#include <vector>
 
 #include <glfw_adapter.h>
 #include <glfw_dispatch.h>
 #include <simulate.h>
+#include <Python.h>
 #include "errors.h"
+#include "indexers.h"
 #include "structs.h"
 #include <pybind11/gil.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/pytypes.h>
+#include <pybind11/stl.h>
 
 namespace mujoco::python {
 namespace {
@@ -69,11 +75,10 @@ class UIAdapterWithPyCallback : public Adapter {
 class SimulateWrapper {
  public:
   SimulateWrapper(std::unique_ptr<PlatformUIAdapter> platform_ui_adapter,
-                  py::object cam, py::object opt,
-                  py::object pert, py::object user_scn, bool is_passive)
+                  py::object cam, py::object opt, py::object pert,
+                  py::object user_scn, bool is_passive)
       : simulate_(new mujoco::Simulate(
-            std::move(platform_ui_adapter),
-            cam.cast<MjvCameraWrapper&>().get(),
+            std::move(platform_ui_adapter), cam.cast<MjvCameraWrapper&>().get(),
             opt.cast<MjvOptionWrapper&>().get(),
             pert.cast<MjvPerturbWrapper&>().get(), is_passive)),
         m_(py::none()),
@@ -91,6 +96,7 @@ class SimulateWrapper {
 
   void Destroy() {
     if (simulate_) {
+      ClearImages();
       delete simulate_;
       simulate_ = nullptr;
       destroyed_.store(1);
@@ -125,6 +131,82 @@ class SimulateWrapper {
 
   py::object GetModel() const { return m_; }
   py::object GetData() const { return d_; }
+
+  mjrRect GetViewport() const {
+    // Return the viewport corresponding to the 3D view, i.e. the viewer window
+    // without the UI elements.
+    return simulate_->uistate.rect[3];
+  }
+
+  void SetFigures(
+      const std::vector<std::pair<mjrRect, py::object>>& viewports_figures) {
+    // Pairs of [viewport, figure], where viewport corresponds to the location
+    // of the figure on the viewer window.
+    std::vector<std::pair<mjrRect, mjvFigure>> user_figures;
+    for (const auto& [viewport, figure] : viewports_figures) {
+      mjvFigure casted_figure = *figure.cast<MjvFigureWrapper&>().get();
+      user_figures.push_back(std::make_pair(viewport, casted_figure));
+    }
+
+    // Set them all at once to prevent figure flickering.
+    simulate_->user_figures_ = user_figures;
+  }
+
+  void ClearFigures() { simulate_->user_figures_.clear(); }
+
+  void SetTexts(
+      const std::vector<std::tuple<int, int, std::string, std::string>>&
+          texts) {
+    // Collection of [font, gridpos, text1, text2] tuples for overlay text
+    std::vector<std::tuple<int, int, std::string, std::string>> user_texts;
+    for (const auto& [font, gridpos, text1, text2] : texts) {
+      user_texts.push_back(std::make_tuple(font, gridpos, text1, text2));
+    }
+
+    // Set them all at once to prevent text flickering.
+    simulate_->user_texts_ = user_texts;
+  }
+
+  void ClearTexts() { simulate_->user_texts_.clear(); }
+
+  void SetImages(
+    const std::vector<std::tuple<mjrRect, pybind11::array&>> viewports_images
+  ) {
+    // Clear previous images to prevent memory leaks
+    ClearImages();
+
+    for (const auto& [viewport, image] : viewports_images) {
+      auto buf = image.request();
+      if (buf.ndim != 3) {
+        throw std::invalid_argument("image must have 3 dimensions (H, W, C)");
+      }
+      if (static_cast<int>(buf.shape[2]) != 3) {
+        throw std::invalid_argument("image must have 3 channels");
+      }
+      if (buf.itemsize != sizeof(unsigned char)) {
+        throw std::invalid_argument("image must be uint8 format");
+      }
+
+      // Calculate size of the image data
+      size_t height = buf.shape[0];
+      size_t width = buf.shape[1];
+      size_t size = height * width * 3;
+
+      // Make a copy of the image data to prevent flickering
+      unsigned char* image_copy = new unsigned char[size];
+      std::memcpy(image_copy, buf.ptr, size);
+
+      simulate_->user_images_.push_back(std::make_tuple(viewport, image_copy));
+    }
+  }
+
+  void ClearImages() {
+    // Free memory for each image before clearing the vector
+    for (const auto& [viewport, image_ptr] : simulate_->user_images_) {
+      delete[] image_ptr;
+    }
+    simulate_->user_images_.clear();
+  }
 
  private:
   mujoco::Simulate* simulate_;
@@ -173,14 +255,14 @@ inline auto CallIfNotNull(void (mujoco::Simulate::*func)(Args...)) {
 }
 
 template <typename T>
-inline auto GetIfNotNull(T mujoco::Simulate::*member) {
+inline auto GetIfNotNull(T mujoco::Simulate::* member) {
   return [member](SimulateWrapper& wrapper) -> T& {
     return SimulateRefOrThrow(wrapper).*member;
   };
 }
 
 template <typename T, typename... Args>
-inline auto SetIfNotNull(T mujoco::Simulate::*member) {
+inline auto SetIfNotNull(T mujoco::Simulate::* member) {
   return [member](SimulateWrapper& wrapper, const T& value) -> void {
     SimulateRefOrThrow(wrapper).*member = value;
   };
@@ -205,8 +287,7 @@ PYBIND11_MODULE(_simulate, pymodule) {
                        py::object key_callback) {
         bool is_passive = !run_physics_thread;
         return std::make_unique<SimulateWrapper>(
-            std::make_unique<UIAdapterWithPyCallback<UIAdapter>>(
-                key_callback),
+            std::make_unique<UIAdapterWithPyCallback<UIAdapter>>(key_callback),
             scn, cam, opt, pert, is_passive);
       }))
       .def("destroy", &SimulateWrapper::Destroy)
@@ -225,8 +306,17 @@ PYBIND11_MODULE(_simulate, pymodule) {
       .def("lock", GetIfNotNull(&mujoco::Simulate::mtx),
            py::call_guard<py::gil_scoped_release>(),
            py::return_value_policy::reference_internal)
+      .def("set_figures", &SimulateWrapper::SetFigures,
+           py::arg("viewports_figures"))
+      .def("clear_figures", &SimulateWrapper::ClearFigures)
+      .def("set_texts", &SimulateWrapper::SetTexts, py::arg("overlay_texts"))
+      .def("clear_texts", &SimulateWrapper::ClearTexts)
+      .def("set_images", &SimulateWrapper::SetImages,
+           py::arg("viewports_images"))
+      .def("clear_images", &SimulateWrapper::ClearImages)
       .def_property_readonly("m", &SimulateWrapper::GetModel)
       .def_property_readonly("d", &SimulateWrapper::GetData)
+      .def_property_readonly("viewport", &SimulateWrapper::GetViewport)
       .def_property_readonly("ctrl_noise_std",
                              GetIfNotNull(&mujoco::Simulate::ctrl_noise_std),
                              py::call_guard<py::gil_scoped_release>())
@@ -260,18 +350,17 @@ PYBIND11_MODULE(_simulate, pymodule) {
                                return sim.exitrequest.load();
                              }),
                              py::call_guard<py::gil_scoped_release>())
-      .def(
-          "exit",
-          [](SimulateWrapper& wrapper) {
-            mujoco::Simulate* sim = wrapper.simulate();
-            if (!sim) {
-              return;
-            }
+      .def("exit",
+           [](SimulateWrapper& wrapper) {
+             mujoco::Simulate* sim = wrapper.simulate();
+             if (!sim) {
+               return;
+             }
 
-            int value = 0;
-            sim->exitrequest.compare_exchange_strong(value, 1);
-            wrapper.WaitUntilExit();
-          })
+             int value = 0;
+             sim->exitrequest.compare_exchange_strong(value, 1);
+             wrapper.WaitUntilExit();
+           })
 
       .def_property_readonly("uiloadrequest",
                              CallIfNotNull(+[](mujoco::Simulate& sim) {

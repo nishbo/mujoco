@@ -16,7 +16,7 @@
 #define MUJOCO_MUJOCO_H_
 
 // header version; should match the library version as returned by mj_version()
-#define mjVERSION_HEADER 328
+#define mjVERSION_HEADER 333
 
 // needed to define size_t, fabs and log10
 #include <stdlib.h>
@@ -110,7 +110,7 @@ MJAPI mjModel* mj_compile(mjSpec* s, const mjVFS* vfs);
 // Recompile spec to model, preserving the state, return 0 on success.
 MJAPI int mj_recompile(mjSpec* s, const mjVFS* vfs, mjModel* m, mjData* d);
 
-// Update XML data structures with info from low-level model, save as MJCF.
+// Update XML data structures with info from low-level model created with mj_loadXML, save as MJCF.
 // If error is not NULL, it must have size error_sz.
 MJAPI int mj_saveLastXML(const char* filename, const mjModel* m, char* error, int error_sz);
 
@@ -257,11 +257,11 @@ MJAPI void mj_printModel(const mjModel* m, const char* filename);
 
 // Print mjData to text file, specifying format.
 // float_format must be a valid printf-style format string for a single float value
-MJAPI void mj_printFormattedData(const mjModel* m, mjData* d, const char* filename,
+MJAPI void mj_printFormattedData(const mjModel* m, const mjData* d, const char* filename,
                                  const char* float_format);
 
 // Print data to text file.
-MJAPI void mj_printData(const mjModel* m, mjData* d, const char* filename);
+MJAPI void mj_printData(const mjModel* m, const mjData* d, const char* filename);
 
 // Print matrix to screen.
 MJAPI void mju_printMat(const mjtNum* mat, int nr, int nc);
@@ -1125,8 +1125,8 @@ MJAPI void mju_quatIntegrate(mjtNum quat[4], const mjtNum vel[3], mjtNum scale);
 // Construct quaternion performing rotation from z-axis to given vector.
 MJAPI void mju_quatZ2Vec(mjtNum quat[4], const mjtNum vec[3]);
 
-// extract 3D rotation from an arbitrary 3x3 matrix by refining the input quaternion
-// returns the number of iterations required to converge
+// Extract 3D rotation from an arbitrary 3x3 matrix by refining the input quaternion.
+// Returns the number of iterations required to converge
 MJAPI int mju_mat2Rot(mjtNum quat[4], const mjtNum mat[9]);
 
 // Convert sequence of Euler angles (radians) to quaternion.
@@ -1414,21 +1414,15 @@ MJAPI void mju_taskJoin(mjTask* task);
 
 //---------------------------------- Attachment ----------------------------------------------------
 
-// Attach child body to a parent frame, return the attached body if success or NULL otherwise.
-MJAPI mjsBody* mjs_attachBody(mjsFrame* parent, const mjsBody* child,
-                              const char* prefix, const char* suffix);
+// Attach child to a parent, return the attached element if success or NULL otherwise.
+MJAPI mjsElement* mjs_attach(mjsElement* parent, const mjsElement* child,
+                             const char* prefix, const char* suffix);
 
-// Attach child frame to a parent body, return the attached frame if success or NULL otherwise.
-MJAPI mjsFrame* mjs_attachFrame(mjsBody* parent, const mjsFrame* child,
-                                const char* prefix, const char* suffix);
-
-// Attach child body to a parent site, return the attached body if success or NULL otherwise.
-MJAPI mjsBody* mjs_attachToSite(mjsSite* parent, const mjsBody* child,
-                                const char* prefix, const char* suffix);
-
-// Detach body from mjSpec, remove all references and delete the body, return 0 on success.
+// Delete body and descendants from mjSpec, remove all references, return 0 on success.
 MJAPI int mjs_detachBody(mjSpec* s, mjsBody* b);
 
+// Delete default class and descendants from mjSpec, remove all references, return 0 on success.
+MJAPI int mjs_detachDefault(mjSpec* s, mjsDefault* d);
 
 //---------------------------------- Tree elements -------------------------------------------------
 
@@ -1552,6 +1546,9 @@ MJAPI mjsBody* mjs_findChild(mjsBody* body, const char* name);
 // Get parent body.
 MJAPI mjsBody* mjs_getParent(mjsElement* element);
 
+// Get parent frame.
+MJAPI mjsFrame* mjs_getFrame(mjsElement* element);
+
 // Find frame by name.
 MJAPI mjsFrame* mjs_findFrame(mjSpec* s, const char* name);
 
@@ -1559,7 +1556,7 @@ MJAPI mjsFrame* mjs_findFrame(mjSpec* s, const char* name);
 MJAPI mjsDefault* mjs_getDefault(mjsElement* element);
 
 // Find default in model by class name.
-MJAPI const mjsDefault* mjs_findDefault(mjSpec* s, const char* classname);
+MJAPI mjsDefault* mjs_findDefault(mjSpec* s, const char* classname);
 
 // Get global default from model.
 MJAPI mjsDefault* mjs_getSpecDefault(mjSpec* s);
@@ -1625,14 +1622,17 @@ MJAPI const char* mjs_getString(const mjString* source);
 // Get double array contents and optionally its size.
 MJAPI const double* mjs_getDouble(const mjDoubleVec* source, int* size);
 
+// Get plugin attributes.
+MJAPI const void* mjs_getPluginAttributes(const mjsPlugin* plugin);
+
 
 //---------------------------------- Spec utilities ------------------------------------------------
 
 // Set element's default.
 MJAPI void mjs_setDefault(mjsElement* element, const mjsDefault* def);
 
-// Set element's enclosing frame.
-MJAPI void mjs_setFrame(mjsElement* dest, mjsFrame* frame);
+// Set element's enclosing frame, return 0 on success.
+MJAPI int mjs_setFrame(mjsElement* dest, mjsFrame* frame);
 
 // Resolve alternative orientations to quat, return error if any.
 MJAPI const char* mjs_resolveOrientation(double quat[4], mjtByte degree, const char* sequence,
@@ -1640,6 +1640,22 @@ MJAPI const char* mjs_resolveOrientation(double quat[4], mjtByte degree, const c
 
 // Transform body into a frame.
 MJAPI mjsFrame* mjs_bodyToFrame(mjsBody** body);
+
+// Set user payload, overriding the existing value for the specified key if present.
+MJAPI void mjs_setUserValue(mjsElement* element, const char* key, const void* data);
+
+// Set user payload, overriding the existing value for the specified key if
+// present. This version differs from mjs_setUserValue in that it takes a
+// cleanup function that will be called when the user payload is deleted.
+MJAPI void mjs_setUserValueWithCleanup(mjsElement* element, const char* key,
+                                       const void* data,
+                                       void (*cleanup)(const void*));
+
+// Return user payload or NULL if none found.
+MJAPI const void* mjs_getUserValue(mjsElement* element, const char* key);
+
+// Delete user payload.
+MJAPI void mjs_deleteUserValue(mjsElement* element, const char* key);
 
 //---------------------------------- Element initialization  ---------------------------------------
 

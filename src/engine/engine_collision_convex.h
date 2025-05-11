@@ -49,6 +49,7 @@ struct _mjCCDObj {
   const mjData* data;
   int geom;
   int geom_type;
+  int vertindex;
   int meshindex;
   int flex;
   int elem;
@@ -80,12 +81,12 @@ void mjc_pointSupport(mjtNum res[3], mjCCDObj* obj, const mjtNum dir[3]);
 void mjc_lineSupport(mjtNum res[3], mjCCDObj* obj, const mjtNum dir[3]);
 
 // pairwise geom collision functions using ccd
-int mjc_PlaneConvex   (const mjModel* m, const mjData* d,
-                       mjContact* con, int g1, int g2, mjtNum margin);
-int mjc_ConvexHField  (const mjModel* m, const mjData* d,
-                       mjContact* con, int g1, int g2, mjtNum margin);
-int mjc_Convex        (const mjModel* m, const mjData* d,
-                       mjContact* con, int g1, int g2, mjtNum margin);
+int mjc_PlaneConvex(const mjModel* m, const mjData* d,
+                    mjContact* con, int g1, int g2, mjtNum margin);
+int mjc_ConvexHField(const mjModel* m, const mjData* d,
+                     mjContact* con, int g1, int g2, mjtNum margin);
+MJAPI int mjc_Convex(const mjModel* m, const mjData* d,
+                     mjContact* con, int g1, int g2, mjtNum margin);
 
 // geom-elem or elem-elem or vert-elem collision function using ccd
 int mjc_ConvexElem    (const mjModel* m, const mjData* d, mjContact* con,

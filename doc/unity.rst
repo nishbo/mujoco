@@ -20,7 +20,7 @@ Installation instructions
 
 The `plug-in directory <https://github.com/google-deepmind/mujoco/tree/main/unity>`__ includes a
 ``package.json`` file.  Unity's package manager recognizes this file and will import the plug-in's C# codebase to your
-project. In addition, Unity also needs the native MuJoCo library, which can be found in the corrsponding `platform
+project. In addition, Unity also needs the native MuJoCo library, which can be found in the corresponding `platform
 archive <https://github.com/google-deepmind/mujoco/releases>`__. If you wish to simply use the plug-in and not
 develop it, you should use one of the version-specific stable commits of the repository, identified by git tags. Check
 out the relevant version of the cloned repository with git (``git checkout 3.X.Y`` where X and Y specify the engine
@@ -37,14 +37,14 @@ _____
 
 The MuJoCo app needs to be run at least once before the native library can be used, in order to register the library as
 a trusted binary. Then, copy the dynamic library file from
-``/Applications/MuJoCo.app/Contents/Frameworks/mujoco.framework/Versions/Current/libmujoco.3.2.8.dylib`` (it can be
+``/Applications/MuJoCo.app/Contents/Frameworks/mujoco.framework/Versions/Current/libmujoco.3.3.3.dylib`` (it can be
 found by browsing the contents of ``MuJoCo.app``) and rename it as ``mujoco.dylib``.
 
 Linux
 _____
 
 Expand the ``tar.gz`` archive to ``~/.mujoco``. Then copy the dynamic library from
-``~/.mujoco/mujoco-3.2.8/lib/libmujoco.so.3.2.8`` and rename it as ``libmujoco.so``.
+``~/.mujoco/mujoco-3.3.3/lib/libmujoco.so.3.3.3`` and rename it as ``libmujoco.so``.
 
 Windows
 _______

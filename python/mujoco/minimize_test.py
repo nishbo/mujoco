@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
-"""Tests for minimize.py."""
 
 import io
 
@@ -32,7 +31,7 @@ class MinimizeTest(absltest.TestCase):
     x, _ = minimize.least_squares(x0, residual, output=out)
     expected_x = np.array((1.0, 1.0))
     np.testing.assert_array_almost_equal(x, expected_x)
-    self.assertIn('norm(dx) < tol', out.getvalue())
+    self.assertIn('norm(gradient) < tol', out.getvalue())
 
   def test_start_at_minimum(self) -> None:
     def residual(x):
@@ -43,7 +42,7 @@ class MinimizeTest(absltest.TestCase):
     x, _ = minimize.least_squares(x0, residual, output=out)
     expected_x = np.array((1.0, 1.0))
     np.testing.assert_array_almost_equal(x, expected_x)
-    self.assertIn('norm(dx) < tol', out.getvalue())
+    self.assertIn('norm(gradient) < tol', out.getvalue())
     self.assertIn('exact minimum found', out.getvalue())
 
   def test_jac_callback(self) -> None:
@@ -61,7 +60,7 @@ class MinimizeTest(absltest.TestCase):
     )
     expected_x = np.array((1.0, 1.0))
     np.testing.assert_array_almost_equal(x, expected_x)
-    self.assertIn('norm(dx) < tol', out.getvalue())
+    self.assertIn('norm(gradient) < tol', out.getvalue())
     self.assertIn('Jacobian matches', out.getvalue())
 
     # Try with bad Jacobian, ask least_squares to check it.
@@ -116,7 +115,7 @@ class MinimizeTest(absltest.TestCase):
         x0, residual, bounds=bounds_types['inbounds'], output=out
     )
     np.testing.assert_array_almost_equal(x, expected_x)
-    self.assertIn('norm(dx) < tol', out.getvalue())
+    self.assertIn('norm(gradient) < tol', out.getvalue())
 
     # Test different bounds conditions.
     for bounds in bounds_types.values():
@@ -128,8 +127,8 @@ class MinimizeTest(absltest.TestCase):
           output=out,
           verbose=minimize.Verbosity.FULLITER,
       )
-      self.assertIn(' < tol', out.getvalue())
-      grad = trace[-2].jacobian.T @ trace[-2].residual
+      self.assertIn('norm(gradient) < tol', out.getvalue())
+      grad = trace[-1].grad
       # If x_i is on the boundary, gradient points out, otherwise it is 0.
       for i, xi in enumerate(x):
         if xi == bounds[0][i]:
@@ -291,6 +290,34 @@ class MinimizeTest(absltest.TestCase):
           output=out,
           check_derivatives=True,
       )
+
+  def test_soft_l1_norm(self) -> None:
+    def residual(x):
+      return np.stack([1 - x[0, :], 10 * (x[1, :] - x[0, :] ** 2)])
+
+    class SoftL1(minimize.Norm):
+      """Implementation of the loss called 'soft_l1' in scipy least_squares."""
+
+      def value(self, r):
+        return np.sum(np.sqrt(r**2 + 1) - 1)
+
+      def grad_hess(self, r, proj):
+        s = np.sqrt(r**2 + 1)
+        y_r = r / s
+        grad = proj.T @ y_r
+        y_rr = (1 - y_r ** 2) / s
+        hess = proj.T @ (y_rr * proj)
+        return grad, hess
+
+    out = io.StringIO()
+    x0 = np.array((0.0, 0.0))
+    x, _ = minimize.least_squares(
+        x0, residual, norm=SoftL1(), output=out, check_derivatives=True
+    )
+    expected_x = np.array((1.0, 1.0))
+    np.testing.assert_array_almost_equal(x, expected_x)
+    self.assertIn('User-provided norm gradient matches', out.getvalue())
+    self.assertIn('User-provided norm Hessian matches', out.getvalue())
 
 
 if __name__ == '__main__':

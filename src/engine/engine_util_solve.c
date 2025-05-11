@@ -191,6 +191,60 @@ int mju_cholFactorSparse(mjtNum* mat, int n, mjtNum mindiag,
 
 
 
+// precount row non-zeros of reverse-Cholesky factor L, return total non-zeros
+//  based on ldl_symbolic from 'Algorithm 8xx: a concise sparse Cholesky factorization package'
+//  reads pattern from upper triangle
+int mju_cholFactorCount(int* L_rownnz, const int* rownnz, const int* rowadr, const int* colind,
+                        int n, mjData* d) {
+  mj_markStack(d);
+  int* parent = mjSTACKALLOC(d, n, int);
+  int* flag = mjSTACKALLOC(d, n, int);
+
+  // loop over rows in reverse order
+  for (int r = n - 1; r >= 0; r--) {
+    parent[r] = -1;
+    flag[r] = r;
+    L_rownnz[r] = 1;  // start with 1 for diagonal
+
+    // loop over non-zero columns of upper triangle
+    int start = rowadr[r];
+    int end = start + rownnz[r];
+    for (int c = start; c < end; c++) {
+      int i = colind[c];
+
+      // skip lower triangle
+      if (i <= r) {
+        continue;
+      }
+
+      // traverse from i to ancestor, stop when row is flagged
+      while (flag[i] != r) {
+        // if not yet set, set parent to current row
+        if (parent[i] == -1) {
+          parent[i] = r;
+        }
+
+        // increment non-zeros, flag row i, advance to parent
+        L_rownnz[i]++;
+        flag[i] = r;
+        i = parent[i];
+      }
+    }
+  }
+
+  mj_freeStack(d);
+
+  // sum up all row non-zeros
+  int nnz = 0;
+  for (int r = 0; r < n; r++) {
+    nnz += L_rownnz[r];
+  }
+
+  return nnz;
+}
+
+
+
 // sparse reverse-order Cholesky solve
 void mju_cholSolveSparse(mjtNum* res, const mjtNum* mat, const mjtNum* vec, int n,
                          const int* rownnz, const int* rowadr, const int* colind) {
@@ -238,7 +292,8 @@ void mju_cholSolveSparse(mjtNum* res, const mjtNum* mat, const mjtNum* vec, int 
 // sparse reverse-order Cholesky rank-one update: L'*L +/- x*x'; return rank
 //  x is sparse, change in sparsity pattern of mat is not allowed
 int mju_cholUpdateSparse(mjtNum* mat, mjtNum* x, int n, int flg_plus,
-                         const int* rownnz, const int* rowadr, int* colind, int x_nnz, int* x_ind,
+                         const int* rownnz, const int* rowadr, const int* colind,
+                         int x_nnz, int* x_ind,
                          mjData* d) {
   mj_markStack(d);
   int* buf_ind = mjSTACKALLOC(d, n, int);
@@ -264,14 +319,8 @@ int mju_cholUpdateSparse(mjtNum* mat, mjtNum* x, int n, int flg_plus,
     mat[adr+nnz-1] = r;
 
     // update row:  mat(r,1:r-1) = (mat(r,1:r-1) + s*x(1:r-1)) / c
-    int new_nnz = mju_combineSparse(mat + adr, x, 1 / c, (flg_plus ? s / c : -s / c),
-                                    nnz-1, i, colind + adr, x_ind,
-                                    sparse_buf, buf_ind);
-
-    // check for size change
-    if (new_nnz != nnz-1) {
-      mjERROR("varying sparsity pattern");
-    }
+    mju_combineSparseInc(mat + adr, x, n, 1 / c, (flg_plus ? s / c : -s / c),
+                         nnz-1, i, colind + adr, x_ind);
 
     // update x:  x(1:r-1) = c*x(1:r-1) - s*mat(r,1:r-1)
     int new_x_nnz = mju_combineSparse(x, mat+adr, c, -s, i, nnz-1, x_ind,

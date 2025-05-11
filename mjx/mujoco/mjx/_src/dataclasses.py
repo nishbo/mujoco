@@ -18,6 +18,7 @@ import copy
 import dataclasses
 import typing
 from typing import Dict, Optional, Sequence, Tuple, TypeVar, Union
+import warnings
 import jax
 import numpy as np
 
@@ -34,7 +35,7 @@ def _jax_in_args(typ) -> bool:
   return False
 
 
-def dataclass(clz: _T) -> _T:
+def dataclass(clz: _T, register_as_pytree: bool) -> _T:
   """Wraps a dataclass with metadata for which fields are pytrees.
 
   This is based off flax.struct.dataclass, but instead of using field
@@ -48,54 +49,81 @@ def dataclass(clz: _T) -> _T:
     the resulting dataclass, registered with Jax
   """
   data_clz = dataclasses.dataclass(frozen=True)(clz)
-  meta_fields, data_fields = [], []
-  for field in dataclasses.fields(data_clz):
-    if _jax_in_args(field.type):
-      data_fields.append(field)
-    else:
-      meta_fields.append(field)
+  data_clz.replace = dataclasses.replace
+  # def replace(self, **updates):
+  #   """Returns a new object replacing the specified fields with new values."""
+  #   if not hasattr(self, '_impl'):
+  #     return dataclasses.replace(self, **updates)
 
-  def replace(self, **updates):
-    """Returns a new object replacing the specified fields with new values."""
-    return dataclasses.replace(self, **updates)
+  #   # Private fields under `_impl` are allowed to be replaced directly as if
+  #   # they were on the base class. This logic will be removed in a future
+  #   # release.
+  #   impl_updates = {}
+  #   for k in tuple(updates.keys()):
+  #     # Recall that getattr is overridden for '_impl' fields.
+  #     hasattr_ = k in self.__annotations__
+  #     if not hasattr_ and hasattr(self._impl, k):  # pylint: disable=protected-access
+  #       impl_updates[k] = updates[k]
+  #       del updates[k]
 
-  data_clz.replace = replace
+  #   if impl_updates:
+  #     updates['_impl'] = self._impl.replace(**impl_updates)
+  #     warnings.warn(
+  #         f'Accessing/replacing fields `{tuple(impl_updates.keys())}` directly'
+  #         f' from `{self.__class__.__name__}` will be deprecated. Refrain from'
+  #         ' using private fields that were moved to'
+  #         f' `{self.__class__.__name__}`._impl.',
+  #         DeprecationWarning,
+  #         stacklevel=2,
+  #     )
 
-  def iterate_clz_with_keys(x):
-    def to_meta(field, obj):
-      val = getattr(obj, field.name)
-      # numpy arrays are not hashable so return raw bytes instead
-      if isinstance(val, np.ndarray):
-        return (val.tobytes(), val.dtype, val.shape)
+  #   return dataclasses.replace(self, **updates)
+
+  # data_clz.replace = replace
+
+  if register_as_pytree:
+    meta_fields, data_fields = [], []
+    for field in dataclasses.fields(data_clz):
+      if _jax_in_args(field.type):
+        data_fields.append(field)
       else:
-        return val
+        meta_fields.append(field)
 
-    def to_data(field, obj):
-      return (jax.tree_util.GetAttrKey(field.name), getattr(obj, field.name))
+    def iterate_clz_with_keys(x):
+      def to_meta(field, obj):
+        val = getattr(obj, field.name)
+        # numpy arrays are not hashable so return raw bytes instead
+        if isinstance(val, np.ndarray):
+          return (val.tobytes(), val.dtype, val.shape)
+        else:
+          return val
 
-    data = tuple(to_data(f, x) for f in data_fields)
-    meta = tuple(to_meta(f, x) for f in meta_fields)
-    return data, meta
+      def to_data(field, obj):
+        return (jax.tree_util.GetAttrKey(field.name), getattr(obj, field.name))
 
-  def clz_from_iterable(meta, data):
+      data = tuple(to_data(f, x) for f in data_fields)
+      meta = tuple(to_meta(f, x) for f in meta_fields)
+      return data, meta
 
-    def from_meta(field, meta):
-      if field.type is np.ndarray:
-        arr = np.frombuffer(meta[0], dtype=meta[1]).reshape(meta[2])
-        return (field.name, arr)
-      else:
-        return (field.name, meta)
+    def clz_from_iterable(meta, data):
 
-    from_data = lambda field, meta: (field.name, meta)
+      def from_meta(field, meta):
+        if field.type is np.ndarray:
+          arr = np.frombuffer(meta[0], dtype=meta[1]).reshape(meta[2])
+          return (field.name, arr)
+        else:
+          return (field.name, meta)
 
-    meta_args = tuple(from_meta(f, m) for f, m in zip(meta_fields, meta))
-    data_args = tuple(from_data(f, m) for f, m in zip(data_fields, data))
+      from_data = lambda field, meta: (field.name, meta)
 
-    return data_clz(**dict(meta_args + data_args))
+      meta_args = tuple(from_meta(f, m) for f, m in zip(meta_fields, meta))
+      data_args = tuple(from_data(f, m) for f, m in zip(data_fields, data))
 
-  jax.tree_util.register_pytree_with_keys(
-      data_clz, iterate_clz_with_keys, clz_from_iterable
-  )
+      return data_clz(**dict(meta_args + data_args))
+
+    jax.tree_util.register_pytree_with_keys(
+        data_clz, iterate_clz_with_keys, clz_from_iterable
+    )
 
   return data_clz
 
@@ -109,8 +137,9 @@ class PyTreeNode:
   This base class additionally avoids type checking errors when using PyType.
   """
 
-  def __init_subclass__(cls):
-    dataclass(cls)
+  def __init_subclass__(cls, register_as_pytree: bool = True, **kwargs):
+    super().__init_subclass__(**kwargs)
+    dataclass(cls, register_as_pytree=register_as_pytree)
 
   def __init__(self, *args, **kwargs):
     # stub for pytype
