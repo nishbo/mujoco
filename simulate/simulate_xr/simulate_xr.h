@@ -26,7 +26,7 @@
 struct SimulateXrController_ {
   bool is_active = false;
   mjtNum pos[3] = {0};
-  mjtNum rot_quat[4] = {0};
+  mjtNum quat[4] = {0};
 
   bool grab = false;
 

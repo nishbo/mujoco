@@ -72,8 +72,8 @@ SimulateXr::SimulateXr() {
   scene_rotate[3] = 0;
 
   scene_translate[0] = 0;
-  scene_translate[1] = 0;
-  scene_translate[2] = -1;
+  scene_translate[1] = -.5;
+  scene_translate[2] = -.5;
 }
 
 SimulateXr::~SimulateXr() {}
@@ -336,9 +336,7 @@ void SimulateXr::after_render(mjrContext *con, int window_width,
 
   // mirror to mujoco window
   glBindFramebuffer(GL_DRAW_FRAMEBUFFER, mjFB_WINDOW);
-  //// TODO: pull window size from the system
-  // glBlitFramebuffer(0, 0, width_render, height, 0, 0, width / 2, height / 2,
-  //                   GL_COLOR_BUFFER_BIT, GL_LINEAR);
+  // pull window size from the system
   _blit_to_mujoco(window_width, window_height);
 
   // here be other things
@@ -501,19 +499,19 @@ void SimulateXr::_view_to_cam(mjvGLCamera &cam, const XrView &view) {
   cam.frustum_center =
       0.5 * (tan(view.fov.angleLeft) + tan(view.fov.angleRight)) * nearZ;
 
-  mjtNum rot_quat[4] = {view.pose.orientation.w, view.pose.orientation.x,
+  mjtNum quat[4] = {view.pose.orientation.w, view.pose.orientation.x,
                         view.pose.orientation.y, view.pose.orientation.z};
 
   mjtNum forward[3] = {0, 0, 0};
   const mjtNum forward_vec[3] = {0, 0, -1};
-  mju_rotVecQuat(forward, forward_vec, rot_quat);
+  mju_rotVecQuat(forward, forward_vec, quat);
   cam.forward[0] = forward[0];
   cam.forward[1] = forward[1];
   cam.forward[2] = forward[2];
 
   mjtNum up[3] = {0, 0, 0};
   const mjtNum up_vec[3] = {0, 1, 0};
-  mju_rotVecQuat(up, up_vec, rot_quat);
+  mju_rotVecQuat(up, up_vec, quat);
   cam.up[0] = up[0];
   cam.up[1] = up[1];
   cam.up[2] = up[2];
@@ -1087,10 +1085,10 @@ void SimulateXr::_hand_to_mujoco_controller(
   simxr_controllers.pos[1] = handPose.position.y;
   simxr_controllers.pos[2] = handPose.position.z;
 
-  simxr_controllers.rot_quat[0] = handPose.orientation.w;
-  simxr_controllers.rot_quat[1] = handPose.orientation.x;
-  simxr_controllers.rot_quat[2] = handPose.orientation.y;
-  simxr_controllers.rot_quat[3] = handPose.orientation.z;
+  simxr_controllers.quat[0] = handPose.orientation.w;
+  simxr_controllers.quat[1] = handPose.orientation.x;
+  simxr_controllers.quat[2] = handPose.orientation.y;
+  simxr_controllers.quat[3] = handPose.orientation.z;
 }
 
 void SimulateXr::_add_controller_geom(mjvScene *scn,
@@ -1168,10 +1166,10 @@ void SimulateXr::_add_controller_geom(mjvScene *scn,
 
 void SimulateXr::_update_controller_pose(mjvScene *scn,
                                          SimulateXrController &ctl) {
-  // data is in ctl.pos[3] and ctl.rot_quat[4]
+  // data is in ctl.pos[3] and ctl.quat[4]
   // needs to be transformed in accordance with the scene
   mjtNum mjpos[3], mjquat[4];
-  mjv_room2model(mjpos, mjquat, ctl.pos, ctl.rot_quat, scn);
+  mjv_room2model(mjpos, mjquat, ctl.pos, ctl.quat, scn);
 
   // position
   mju_n2f(ctl.g->pos, mjpos, 3);
@@ -1185,7 +1183,7 @@ void SimulateXr::_update_controller_pose(mjvScene *scn,
   // the actual controller is perpendicular to the direction (up)
   // TODO set up direction based on the type of controller.
   const mjtNum axis[4] = {0, 0, 0.7071068, 0.7071068};
-  mju_mulQuat(mjquat, ctl.rot_quat, axis);
+  mju_mulQuat(mjquat, ctl.quat, axis);
   mjv_room2model(mjpos, mjquat, ctl.pos, mjquat, scn);
 
   mju_n2f(ctl.g2->pos, mjpos, 3);
@@ -1225,15 +1223,18 @@ void SimulateXr::_perform_controller_action(mjModel *m, mjData *d,
       mjtNum negp[3], negq[4], xiquat[4];
       mju_mulQuat(xiquat, d->xquat + 4 * ctl.target_body,
                   m->body_iquat + 4 * ctl.target_body);
-      mju_negPose(negp, negq, ctl.pos, ctl.rot_quat);
+      mju_negPose(negp, negq, ctl.pos, ctl.quat);
       mju_mulPose(ctl.target_rel_pos, ctl.target_rel_quat, negp, negq,
                   d->xipos + 3 * ctl.target_body, xiquat);
+
+      printf_s("target_rel_pos %.2f, %.2f, %.2f\n", ctl.target_rel_pos[0],
+               ctl.target_rel_pos[1], ctl.target_rel_pos[2]);
 
       // color controller
       _mju_copy4_f(ctl.g->rgba, ctl.rgba_select);
     } else {
       // calculate the resultant target pose depending on controller pose
-      mju_mulPose(ctl.target_pos, ctl.target_quat, ctl.pos, ctl.rot_quat,
+      mju_mulPose(ctl.target_pos, ctl.target_quat, ctl.pos, ctl.quat,
                   ctl.target_rel_pos, ctl.target_rel_quat);
 
       // color controller
@@ -1251,13 +1252,18 @@ void SimulateXr::_enact_controller_effects(mjModel *m, mjData *d,
                                            SimulateXrController &ctl) {
   if (ctl.grab && ctl.target_body > 0) {
     // perpare mjvPerturb object
-    pert.active = mjPERT_TRANSLATE | mjPERT_ROTATE;
+    if (pert.active)  // if adding a second perturbation
+      pert.active2 = mjPERT_TRANSLATE | mjPERT_ROTATE;
+    else
+      pert.active = mjPERT_TRANSLATE | mjPERT_ROTATE;
     pert.select = ctl.target_body;
     mju_copy3(pert.refpos, ctl.target_pos);
     mju_copy(pert.refquat, ctl.target_quat, 4);
 
+    mju_copy3(pert.refselpos, ctl.target_pos);
+
     // apply
-    mjv_applyPerturbPose(m, d, &pert, 0);
+    //mjv_applyPerturbPose(m, d, &pert, 0);  // TODO reenable
     mjv_applyPerturbForce(m, d, &pert);
   }
 }
