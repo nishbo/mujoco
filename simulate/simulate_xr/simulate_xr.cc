@@ -1060,6 +1060,7 @@ void SimulateXr::_blit_to_mujoco(int dst_width, int dst_height) {
 void SimulateXr::_before_render_controllers() { 
   XrPosef handPose;
 
+  // click and pose
   if (_sim_xr_controllers.get_controller_position_left(handPose) == 0) {
     _hand_to_mujoco_controller(handPose, simxr_controllers[0]);
     simxr_controllers[0].is_active = true;
@@ -1077,6 +1078,11 @@ void SimulateXr::_before_render_controllers() {
         _sim_xr_controllers.is_right_controller_grabbing();
   } else
     simxr_controllers[1].is_active = false;
+
+  // common state
+  // no needs for check - logic is handled in the actions
+  simxr_control_state.grab_state =
+      _sim_xr_controllers.get_controller_grab_action();
 }
 
 void SimulateXr::_hand_to_mujoco_controller(
@@ -1227,8 +1233,8 @@ void SimulateXr::_perform_controller_action(mjModel *m, mjData *d,
       mju_mulPose(ctl.target_rel_pos, ctl.target_rel_quat, negp, negq,
                   d->xipos + 3 * ctl.target_body, xiquat);
 
-      printf_s("target_rel_pos %.2f, %.2f, %.2f\n", ctl.target_rel_pos[0],
-               ctl.target_rel_pos[1], ctl.target_rel_pos[2]);
+      //printf_s("target_rel_pos %.2f, %.2f, %.2f\n", ctl.target_rel_pos[0],
+      //         ctl.target_rel_pos[1], ctl.target_rel_pos[2]);
 
       // color controller
       _mju_copy4_f(ctl.g->rgba, ctl.rgba_select);
@@ -1252,10 +1258,28 @@ void SimulateXr::_enact_controller_effects(mjModel *m, mjData *d,
                                            SimulateXrController &ctl) {
   if (ctl.grab && ctl.target_body > 0) {
     // perpare mjvPerturb object
+    int active_flag = 0;
+    switch (simxr_control_state.grab_state) {
+      case SIMXR_CONTROLLER_GRAB_ACTIONS::TRANSLATE:
+        active_flag = mjPERT_TRANSLATE;
+        break;
+      case SIMXR_CONTROLLER_GRAB_ACTIONS::ROTATE:
+        active_flag = mjPERT_ROTATE;
+        break;
+      case SIMXR_CONTROLLER_GRAB_ACTIONS::BOTH:
+        active_flag = mjPERT_TRANSLATE | mjPERT_ROTATE;
+        break;
+      default:
+        mju_error("Wrong simxr controller grab action detected.");
+        break;
+    }
+
+    // TODO currently mujoco does not implement active2 correctly
     if (pert.active)  // if adding a second perturbation
-      pert.active2 = mjPERT_TRANSLATE | mjPERT_ROTATE;
+      pert.active2 = active_flag;
     else
-      pert.active = mjPERT_TRANSLATE | mjPERT_ROTATE;
+      pert.active = active_flag;
+
     pert.select = ctl.target_body;
     mju_copy3(pert.refpos, ctl.target_pos);
     mju_copy(pert.refquat, ctl.target_quat, 4);
@@ -1263,7 +1287,7 @@ void SimulateXr::_enact_controller_effects(mjModel *m, mjData *d,
     mju_copy3(pert.refselpos, ctl.target_pos);
 
     // apply
-    //mjv_applyPerturbPose(m, d, &pert, 0);  // TODO reenable
+    //mjv_applyPerturbPose(m, d, &pert, 0);  // TODO reenable - for paused after testing
     mjv_applyPerturbForce(m, d, &pert);
   }
 }

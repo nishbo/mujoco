@@ -88,7 +88,15 @@ void SimulateXrControllers::poll_actions(XrTime predictedTime,
     actionStateGetInfo.subactionPath = m_handPaths[i];
     if (xrGetActionStateFloat(session, &actionStateGetInfo, &m_grabState[i]) <
         0) {
-      // mju_warning("Failed to get Float State of Grab Cube action.");
+      // mju_warning("Failed to get Float State of Grab action.");
+    }
+  }
+  {
+    actionStateGetInfo.action = m_switchGrabAction;
+    actionStateGetInfo.subactionPath = 0;
+    if (xrGetActionStateBoolean(session, &actionStateGetInfo,
+                                &m_switchGrabState) < 0) {
+      // mju_warning("Failed to get Boolean State of Switch Grab action.");
     }
   }
   for (int i = 0; i < 2; i++) {
@@ -105,6 +113,19 @@ void SimulateXrControllers::poll_actions(XrTime predictedTime,
     if (xrApplyHapticFeedback(session, &hapticActionInfo,
                               (XrHapticBaseHeader *)&vibration) < 0) {
       // mju_warning("Failed to apply haptic feedback.");
+    }
+  }
+
+  // process button presses - on liftoff
+  if (m_switchGrabState.isActive == XR_TRUE &&
+      m_switchGrabState.currentState == XR_FALSE &&
+      m_switchGrabState.changedSinceLastSync == XR_TRUE) {
+    m_switchGrabActionState = static_cast<SIMXR_CONTROLLER_GRAB_ACTIONS>(
+        (static_cast<int>(m_switchGrabActionState) + 1) %
+        static_cast<int>(SIMXR_CONTROLLER_GRAB_ACTIONS::NUM_ACTIONS));
+    if (verbose > 2) {
+      printf_s(" Switched grab action state to %d.",
+               static_cast<int>(m_switchGrabActionState));
     }
   }
 
@@ -153,6 +174,11 @@ bool SimulateXrControllers::is_right_controller_grabbing() {
     return m_grabState[1].currentState > 0.5f;
   }
   return false;
+}
+
+SIMXR_CONTROLLER_GRAB_ACTIONS
+SimulateXrControllers::get_controller_grab_action() {
+  return m_switchGrabActionState;
 }
 
 XrPath SimulateXrControllers::CreateXrPath(const char *path_string,
@@ -207,8 +233,11 @@ int SimulateXrControllers::create_action_set(XrInstance &xrInstance) {
   }
 
   // An Action for grabbing.
-  create_action(m_grabAction, "grab", XR_ACTION_TYPE_FLOAT_INPUT,
-                xrInstance, {"/user/hand/left", "/user/hand/right"});
+  create_action(m_grabAction, "grab", XR_ACTION_TYPE_FLOAT_INPUT, xrInstance,
+                {"/user/hand/left", "/user/hand/right"});
+  // An Action for switching grabbing actions.
+  create_action(m_switchGrabAction, "switch-grab", XR_ACTION_TYPE_BOOLEAN_INPUT,
+                xrInstance);
   // An Action for the position of the palm of the user's hand - appropriate for
   // the location of a grabbing Actions.
   create_action(m_palmPoseAction, "palm-pose", XR_ACTION_TYPE_POSE_INPUT,
@@ -254,6 +283,8 @@ int SimulateXrControllers::suggest_bindings(XrInstance &xrInstance) {
         CreateXrPath("/user/hand/left/input/select/click", xrInstance)},
        {m_grabAction,
         CreateXrPath("/user/hand/right/input/select/click", xrInstance)},
+       {m_switchGrabAction,
+        CreateXrPath("/user/hand/right/input/menu/click", xrInstance)},
        {m_palmPoseAction,
         CreateXrPath("/user/hand/left/input/grip/pose", xrInstance)},
        {m_palmPoseAction,
@@ -264,7 +295,7 @@ int SimulateXrControllers::suggest_bindings(XrInstance &xrInstance) {
         CreateXrPath("/user/hand/right/output/haptic", xrInstance)}},
       xrInstance);
   // Each Action here has two paths, one for each SubAction path.
-  // seems to work fine for MetaXr
+  // seems to work okay for MetaXr - cannot find binding for buttons
   any_ok |= suggest_single_binding(
       "/interaction_profiles/oculus/touch_controller",
       {
@@ -272,6 +303,8 @@ int SimulateXrControllers::suggest_bindings(XrInstance &xrInstance) {
         CreateXrPath("/user/hand/left/input/trigger/value", xrInstance)},
        {m_grabAction,
         CreateXrPath("/user/hand/right/input/trigger/value", xrInstance)},
+       {m_switchGrabAction,
+        CreateXrPath("/user/hand/right/input/a/click", xrInstance)},
        {m_palmPoseAction,
         CreateXrPath("/user/hand/left/input/grip/pose", xrInstance)},
        {m_palmPoseAction,
@@ -281,6 +314,24 @@ int SimulateXrControllers::suggest_bindings(XrInstance &xrInstance) {
        {m_buzzAction,
         CreateXrPath("/user/hand/right/output/haptic", xrInstance)}},
       xrInstance);
+  //// specifically for quest 3 controllers - Meta Quest Touch Pro Controller 
+  //any_ok |= suggest_single_binding(
+  //    "/interaction_profiles/facebook/touch_controller_pro",
+  //    {{m_grabAction,
+  //      CreateXrPath("/user/hand/left/input/trigger/value", xrInstance)},
+  //     {m_grabAction,
+  //      CreateXrPath("/user/hand/right/input/trigger/value", xrInstance)},
+  //     {m_switchGrabAction,
+  //      CreateXrPath("/user/hand/right/input/a/click", xrInstance)},
+  //     {m_palmPoseAction,
+  //      CreateXrPath("/user/hand/left/input/grip/pose", xrInstance)},
+  //     {m_palmPoseAction,
+  //      CreateXrPath("/user/hand/right/input/grip/pose", xrInstance)},
+  //     {m_buzzAction,
+  //      CreateXrPath("/user/hand/left/output/haptic", xrInstance)},
+  //     {m_buzzAction,
+  //      CreateXrPath("/user/hand/right/output/haptic", xrInstance)}},
+  //    xrInstance);
   if (!any_ok) {
     mju_warning("ERROR: Could not select binding.");
     return -1;

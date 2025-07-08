@@ -17,6 +17,15 @@
 
 #include "simulate_xr_imports.h"
 
+enum class SIMXR_CONTROLLER_GRAB_ACTIONS {
+  TRANSLATE = 0,
+  ROTATE,
+  BOTH,
+
+  NUM_ACTIONS,
+};
+
+
 class SimulateXrControllers {
  public:
   SimulateXrControllers();
@@ -42,15 +51,22 @@ class SimulateXrControllers {
   bool is_left_controller_grabbing();
   bool is_right_controller_grabbing();
 
+  SIMXR_CONTROLLER_GRAB_ACTIONS get_controller_grab_action();
+
  private:
   XrActionSet m_actionSet;
   // An action for grabbing (bodies)
   XrAction m_grabAction;
+  // switching the type of grabbing
+  XrAction m_switchGrabAction;
   // The realtime states of these actions.
   XrActionStateFloat m_grabState[2] = {{XR_TYPE_ACTION_STATE_FLOAT},
                                        {XR_TYPE_ACTION_STATE_FLOAT}};
+  XrActionStateBoolean m_switchGrabState = {XR_TYPE_ACTION_STATE_BOOLEAN};
+  SIMXR_CONTROLLER_GRAB_ACTIONS m_switchGrabActionState =
+      SIMXR_CONTROLLER_GRAB_ACTIONS::TRANSLATE;
   // TODO:
-  // The haptic output action for grabbing.
+  // The haptic output action for grabbing or switching.
   XrAction m_buzzAction;
   // The current haptic output value for each controller.
   float m_buzz[2] = {0, 0};

@@ -48,6 +48,12 @@ struct SimulateXrController_ {
 };
 typedef struct SimulateXrController_ SimulateXrController;
 
+struct SimulateXrControlState_ {
+  SIMXR_CONTROLLER_GRAB_ACTIONS grab_state =
+      SIMXR_CONTROLLER_GRAB_ACTIONS::TRANSLATE;
+};
+typedef struct SimulateXrControlState_ SimulateXrControlState;
+
 
 class SimulateXr {
  public:
@@ -79,6 +85,8 @@ class SimulateXr {
 
   // user-friendly struct with extracted information from XR
   SimulateXrController simxr_controllers[2];
+  // common state values
+  SimulateXrControlState simxr_control_state;
 
   void add_controller_geoms(mjvScene *scn);
 
