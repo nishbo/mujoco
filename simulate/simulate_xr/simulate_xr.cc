@@ -81,7 +81,7 @@ SimulateXr::~SimulateXr() {}
 void SimulateXr::init() {
   // Needed for textures
   if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)) {
-    mju_warning("Failed to initialize OpenGL context for OpenXR.");
+    mju_error("Failed to initialize OpenGL context for OpenXR.");
     return;
   } else if (verbose > 0)
     std::printf("Initialized OpenGL context for OpenXR.\n");
@@ -586,7 +586,7 @@ int SimulateXr::_get_view_configuration_views() {
     return -1;
   }
 
-  // Pick the first application supported View Configuration Type con supported
+  // Pick the first application supported View Configuration Type supported
   // by the hardware.
   for (const XrViewConfigurationType &viewConfiguration :
        m_applicationViewConfigurations) {
@@ -864,7 +864,7 @@ void SimulateXr::_poll_events() {
       case XR_TYPE_EVENT_DATA_INSTANCE_LOSS_PENDING: {
         XrEventDataInstanceLossPending *instanceLossPending =
             reinterpret_cast<XrEventDataInstanceLossPending *>(&eventData);
-        std::printf("OPENXR: Instance Loss Pending at: lld.\n",
+        std::printf("OPENXR: Instance Loss Pending at: %lld.\n",
                     instanceLossPending->lossTime);
         m_sessionRunning = false;
         break;
@@ -891,7 +891,7 @@ void SimulateXr::_poll_events() {
                 &eventData);
         std::printf(
             "OPENXR: Reference Space Change pending for Session: %lld\n",
-            (unsigned __int64)referenceSpaceChangePending->session);
+            (uint64_t)referenceSpaceChangePending->session);
         if (referenceSpaceChangePending->session != m_session) {
           std::printf(
               "XrEventDataReferenceSpaceChangePending for unknown Session\n");
