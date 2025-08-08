@@ -15,34 +15,44 @@
 #ifndef SIMULATE_XR_H_
 #define SIMULATE_XR_H_
 
-#define GLEW_STATIC
-
-// the code only works with Windows, because support for XR on Linux
-// and Mac is limited or nonexistent
-#ifdef _WIN32
-
-// Windows is needed but without minmax
-#define WIN32_LEAN_AND_MEAN
-#define NOMINMAX
-#include <Windows.h>
-#include <unknwn.h>
-
-// for proper init of openxr
-#define XR_USE_PLATFORM_WIN32
-#define XR_USE_GRAPHICS_API_OPENGL
-
-#endif // WIN32
-
-// openxr with render by opengl
-#include <openxr/openxr.h>
-#include <openxr/openxr_platform.h>
-
-// to link to windows?
-#include <mujoco/mujoco.h>
+#include "simulate_xr_controllers.h"
 
 #include <vector>
 #include <unordered_map>
 #include <algorithm>
+
+
+// user-friendly struct with extracted information from XR
+struct SimulateXrController_ {
+  bool is_active = false;
+  mjtNum pos[3] = {0};
+  mjtNum quat[4] = {0};
+
+  bool grab = false;
+
+  // set in SimulateXr::init()
+  float rgba[4];         // controller color
+  float rgba_select[4];  // controller select color
+
+  mjvGeom *g = nullptr;   // box
+  mjvGeom *g2 = nullptr;  // arrow
+
+  mjtNum ray[3];
+  mjtNum ray_pos[3];
+
+  int target_body = -1;
+  mjtNum target_rel_pos[3] = {0};
+  mjtNum target_rel_quat[4] = {0};
+  mjtNum target_pos[3] = {0};
+  mjtNum target_quat[4] = {0};
+};
+typedef struct SimulateXrController_ SimulateXrController;
+
+struct SimulateXrControlState_ {
+  SIMXR_CONTROLLER_GRAB_ACTIONS grab_state =
+      SIMXR_CONTROLLER_GRAB_ACTIONS::TRANSLATE;
+};
+typedef struct SimulateXrControlState_ SimulateXrControlState;
 
 
 class SimulateXr {
@@ -68,17 +78,37 @@ class SimulateXr {
 
   bool before_render(mjvScene *scn, mjModel *m);
 
-  void after_render(mjrContext *con);
+  void after_render(mjrContext *con, int window_width, int window_height);
 
   bool is_initialized();
+  bool is_controllers_initialized();
+
+  // user-friendly struct with extracted information from XR
+  SimulateXrController simxr_controllers[2];
+  // common state values
+  SimulateXrControlState simxr_control_state;
+
+  void add_controller_geoms(mjvScene *scn);
+
+  // within rendering
+  void perform_controller_actions(mjModel *m, mjData *d, const mjvOption *vopt);
+
+  // within physical sim
+  void enact_controller_effects(mjModel *m, mjData *d, mjvPerturb &pert);
 
  private:
   bool m_initialized = false;
+  bool m_controllers_initialized = false;
 
   const float nearZ = 0.05f;
-  const float farZ = 50.0f;  // todo switch to 100?
+  const float farZ = 50.0f;  // 100 is optional
+
+  mjtNum scene_rotate[4];
+  mjtNum scene_translate[3];
 
   std::vector<XrView> m_views;
+
+  SimulateXrControllers _sim_xr_controllers;
 
   XrInstance m_xrInstance = XR_NULL_HANDLE;
   std::vector<const char *> m_activeAPILayers = {};
@@ -200,7 +230,22 @@ class SimulateXr {
   RenderLayerInfo renderLayerInfo;
   bool rendered = false;
 
-  void _blit_to_mujoco();
+  void _blit_to_mujoco(int dst_width, int dst_height);
+
+  void _before_render_controllers();
+
+  void _hand_to_mujoco_controller(XrPosef &m_handPose,
+                                  SimulateXrController &simxr_controllers);
+
+  void _add_controller_geom(mjvScene *scn, SimulateXrController &ctl);
+
+  void _update_controller_pose(mjvScene *scn, SimulateXrController &ctl);
+
+  void _perform_controller_action(mjModel *m, mjData *d, const mjvOption *vopt,
+                                  SimulateXrController &ctl);
+
+  void _enact_controller_effects(mjModel *m, mjData *d, mjvPerturb &pert,
+                                 SimulateXrController &ctl);
 };
 
 #endif  // SIMULATE_XR_H_

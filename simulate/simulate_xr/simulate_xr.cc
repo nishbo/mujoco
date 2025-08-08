@@ -1,4 +1,3 @@
-#include "simulate_xr.h"
 // Copyright 2024 DeepMind Technologies Limited
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,7 +25,56 @@
 #define GLFW_NATIVE_INCLUDE_NONE
 #include <GLFW/glfw3native.h>
 
-SimulateXr::SimulateXr() {}
+
+// res = vec
+void _mju_copy3_f(float res[3], const float data[3]) {
+  res[0] = data[0];
+  res[1] = data[1];
+  res[2] = data[2];
+}
+
+// res = vec
+void _mju_copy4_f(float res[4], const float data[4]) {
+  res[0] = data[0];
+  res[1] = data[1];
+  res[2] = data[2];
+  res[3] = data[3];
+}
+
+SimulateXr::SimulateXr() {
+  // default controller colors
+  simxr_controllers[0].rgba[0] = 0.8f;
+  simxr_controllers[0].rgba[1] = 0.2f;
+  simxr_controllers[0].rgba[2] = 0.2f;
+  simxr_controllers[0].rgba[3] = 0.6f;
+
+  simxr_controllers[1].rgba[0] = 0.2f;
+  simxr_controllers[1].rgba[1] = 0.8f;
+  simxr_controllers[1].rgba[2] = 0.2f;
+  simxr_controllers[1].rgba[3] = 0.6f;
+
+  // default controller select colors
+  simxr_controllers[0].rgba_select[0] = 0.4f;
+  simxr_controllers[0].rgba_select[1] = 0.1f;
+  simxr_controllers[0].rgba_select[2] = 0.1f;
+  simxr_controllers[0].rgba_select[3] = 0.6f;
+
+  simxr_controllers[1].rgba_select[0] = 0.1f;
+  simxr_controllers[1].rgba_select[1] = 0.4f;
+  simxr_controllers[1].rgba_select[2] = 0.1f;
+  simxr_controllers[1].rgba_select[3] = 0.6f;
+
+  // default scene rotate and translate
+  // TODO load from model files?
+  scene_rotate[0] = cos(0.25 * mjPI);
+  scene_rotate[1] = sin(-0.25 * mjPI);
+  scene_rotate[2] = 0;
+  scene_rotate[3] = 0;
+
+  scene_translate[0] = 0;
+  scene_translate[1] = -.5;
+  scene_translate[2] = -.5;
+}
 
 SimulateXr::~SimulateXr() {}
 
@@ -52,6 +100,12 @@ void SimulateXr::init() {
   } else if (verbose > 1)
     std::printf("Got XR System ID.\n");
 
+  if (this->_sim_xr_controllers.init(m_xrInstance) < 0) {
+    mju_warning("Failed to initialize XR controllers.");
+  } else {
+    m_controllers_initialized = true;
+  }
+
   if (_get_view_configuration_views() < 0) {
     mju_warning("Failed to get XR view configuration.");
     return;
@@ -69,6 +123,11 @@ void SimulateXr::init() {
     return;
   } else if (verbose > 0)
     std::printf("Created XR session.\n");
+
+  if (this->_sim_xr_controllers.init_session(m_xrInstance, m_session) < 0) {
+    mju_warning("Failed to bind XR controllers.");
+    return;
+  }
 
   if (_create_reference_space() < 0) {
     mju_warning("Failed to create XR reference space.");
@@ -144,6 +203,14 @@ bool SimulateXr::before_render(mjvScene *scn, mjModel *m) {
 
   if (!(sessionActive && frameState.shouldRender)) return false;
 
+  // Controller binds
+  if (this->is_controllers_initialized()) {
+    _sim_xr_controllers.poll_actions(frameState.predictedDisplayTime, m_session,
+                                     m_localSpace);
+    // pull information
+    _before_render_controllers();
+  }
+
   // essentially, first part of RenderLayer
 
   // Locate the views from the view configuration within the (reference) space
@@ -194,10 +261,14 @@ bool SimulateXr::before_render(mjvScene *scn, mjModel *m) {
   }
 
   scn->enabletransform = true;
-  scn->rotate[0] = cos(0.25 * mjPI);
-  scn->rotate[1] = sin(-0.25 * mjPI);
-  scn->translate[1] = 0;  // TODO AS give user control?
-  scn->translate[2] = -1;
+  mju_n2f(scn->rotate, this->scene_rotate, 4);
+  mju_n2f(scn->translate, this->scene_translate, 3);
+
+  // Controller render
+  if (this->is_controllers_initialized()) {
+    // need to add them every time to render
+    add_controller_geoms(scn);
+  }
 
   // RENDER
   // BeginRendering
@@ -213,7 +284,41 @@ bool SimulateXr::before_render(mjvScene *scn, mjModel *m) {
 
 bool SimulateXr::is_initialized() { return m_initialized; }
 
-void SimulateXr::after_render(mjrContext *con) {
+bool SimulateXr::is_controllers_initialized() {
+  return m_controllers_initialized;
+}
+
+void SimulateXr::add_controller_geoms(mjvScene *scn) {
+  if (this->is_controllers_initialized()) {
+    this->_add_controller_geom(scn, simxr_controllers[0]);
+    this->_add_controller_geom(scn, simxr_controllers[1]);
+  }
+}
+
+void SimulateXr::perform_controller_actions(mjModel *m, mjData *d,
+                                            const mjvOption *vopt) {
+  if (this->is_controllers_initialized()) {
+    for (int i_controller = 0; i_controller < 2; i_controller++) {
+      if (simxr_controllers[i_controller].is_active)
+        this->_perform_controller_action(m, d, vopt,
+                                         simxr_controllers[i_controller]);
+    }
+  }
+}
+
+void SimulateXr::enact_controller_effects(mjModel *m, mjData *d,
+                                          mjvPerturb &pert) {
+  if (this->is_controllers_initialized()) {
+    mju_zero(d->xfrc_applied, 6 * m->nbody);
+    for (int i_controller = 0; i_controller < 2; i_controller++) {
+      if (simxr_controllers[i_controller].is_active)
+        this->_enact_controller_effects(m, d, pert, simxr_controllers[i_controller]);
+    }
+  }
+}
+
+void SimulateXr::after_render(mjrContext *con, int window_width,
+                              int window_height) {
   if (!m_sessionRunning) return;
 
   int answ;
@@ -231,10 +336,8 @@ void SimulateXr::after_render(mjrContext *con) {
 
   // mirror to mujoco window
   glBindFramebuffer(GL_DRAW_FRAMEBUFFER, mjFB_WINDOW);
-  //// TODO: pull window size from the system
-  // glBlitFramebuffer(0, 0, width_render, height, 0, 0, width / 2, height / 2,
-  //                   GL_COLOR_BUFFER_BIT, GL_LINEAR);
-  _blit_to_mujoco();
+  // pull window size from the system
+  _blit_to_mujoco(window_width, window_height);
 
   // here be other things
   //// EndRendering
@@ -247,7 +350,7 @@ void SimulateXr::after_render(mjrContext *con) {
   answ = xrReleaseSwapchainImage(m_colorSwapchainInfo.swapchain, &releaseInfo);
   if (answ < 0) {
     // OpenXR throws one XR_ERROR_CALL_ORDER_INVALID at the end
-    if (answ != -37 || verbose > 2)
+    if (answ != XR_ERROR_CALL_ORDER_INVALID || verbose > 2)
       mju_warning("Failed to release Image back to the Color Swapchain. Code: %d.", answ);
   }
 
@@ -396,19 +499,19 @@ void SimulateXr::_view_to_cam(mjvGLCamera &cam, const XrView &view) {
   cam.frustum_center =
       0.5 * (tan(view.fov.angleLeft) + tan(view.fov.angleRight)) * nearZ;
 
-  mjtNum rot_quat[4] = {view.pose.orientation.w, view.pose.orientation.x,
+  mjtNum quat[4] = {view.pose.orientation.w, view.pose.orientation.x,
                         view.pose.orientation.y, view.pose.orientation.z};
 
   mjtNum forward[3] = {0, 0, 0};
   const mjtNum forward_vec[3] = {0, 0, -1};
-  mju_rotVecQuat(forward, forward_vec, rot_quat);
+  mju_rotVecQuat(forward, forward_vec, quat);
   cam.forward[0] = forward[0];
   cam.forward[1] = forward[1];
   cam.forward[2] = forward[2];
 
   mjtNum up[3] = {0, 0, 0};
   const mjtNum up_vec[3] = {0, 1, 0};
-  mju_rotVecQuat(up, up_vec, rot_quat);
+  mju_rotVecQuat(up, up_vec, quat);
   cam.up[0] = up[0];
   cam.up[1] = up[1];
   cam.up[2] = up[2];
@@ -771,8 +874,9 @@ void SimulateXr::_poll_events() {
         XrEventDataInteractionProfileChanged *interactionProfileChanged =
             reinterpret_cast<XrEventDataInteractionProfileChanged *>(
                 &eventData);
-        std::printf("OPENXR: Interaction Profile changed for Session: %lld.\n",
-                    (unsigned __int64)interactionProfileChanged->session);
+        // does not seem useful
+        //std::printf("OPENXR: Interaction Profile changed for Session: %lld.\n",
+        //            (unsigned __int64)interactionProfileChanged->session);
         if (interactionProfileChanged->session != m_session) {
           std::printf(
               "XrEventDataInteractionProfileChanged for unknown Session");
@@ -906,15 +1010,12 @@ int64_t SimulateXr::SelectColorSwapchainFormat(
   return *swapchainFormatIt;
 }
 
-void SimulateXr::_blit_to_mujoco() {
+void SimulateXr::_blit_to_mujoco(int dst_width, int dst_height) {
   // make the background black
   glClearColor(0, 0, 0, 1);
 
-  // get window size
+  // displacement within window
   int dst_x = 0, dst_y = 0;
-  int dst_width, dst_height;
-  GLFWwindow *window_ = glfwGetCurrentContext();
-  glfwGetWindowSize(window_, &dst_width, &dst_height);
 
   int src_width = width;
   int src_height = width;  // height / 2;
@@ -954,4 +1055,239 @@ void SimulateXr::_blit_to_mujoco() {
 
   glBlitFramebuffer(src_x, src_y, src_width, src_height, dst_x, dst_y,
                     dst_width, dst_height, GL_COLOR_BUFFER_BIT, GL_LINEAR);
+}
+
+void SimulateXr::_before_render_controllers() { 
+  XrPosef handPose;
+
+  // click and pose
+  if (_sim_xr_controllers.get_controller_position_left(handPose) == 0) {
+    _hand_to_mujoco_controller(handPose, simxr_controllers[0]);
+    simxr_controllers[0].is_active = true;
+    // check button presses/actions
+    simxr_controllers[0].grab =
+        _sim_xr_controllers.is_left_controller_grabbing();
+  } else
+    simxr_controllers[0].is_active = false;
+
+  if (_sim_xr_controllers.get_controller_position_right(handPose) == 0) {
+    _hand_to_mujoco_controller(handPose, simxr_controllers[1]);
+    simxr_controllers[1].is_active = true;
+    // check button presses/actions
+    simxr_controllers[1].grab =
+        _sim_xr_controllers.is_right_controller_grabbing();
+  } else
+    simxr_controllers[1].is_active = false;
+
+  // common state
+  // no needs for check - logic is handled in the actions
+  simxr_control_state.grab_state =
+      _sim_xr_controllers.get_controller_grab_action();
+}
+
+void SimulateXr::_hand_to_mujoco_controller(
+    XrPosef &handPose, SimulateXrController &simxr_controllers) {
+  simxr_controllers.pos[0] = handPose.position.x;
+  simxr_controllers.pos[1] = handPose.position.y;
+  simxr_controllers.pos[2] = handPose.position.z;
+
+  simxr_controllers.quat[0] = handPose.orientation.w;
+  simxr_controllers.quat[1] = handPose.orientation.x;
+  simxr_controllers.quat[2] = handPose.orientation.y;
+  simxr_controllers.quat[3] = handPose.orientation.z;
+}
+
+void SimulateXr::_add_controller_geom(mjvScene *scn,
+                                      SimulateXrController &ctl) {
+  // if (!simxr_controller.is_active) return;
+  if (scn->ngeom + 1 >= scn->maxgeom) {
+    mju_warning("Geom buffer not big enough to add controllers.");
+    return;
+  }
+
+  mjvGeom *g = scn->geoms + scn->ngeom;
+
+  // Add BOX
+  // default geom
+  g->type = mjGEOM_BOX;
+  g->dataid = -1;
+  g->objtype = mjOBJ_UNKNOWN;
+  g->objid = -1;
+  g->category = mjCAT_DECOR;
+  //g->texid = -1;
+  //g->texuniform = 0;
+  //g->texrepeat[0] = 1;
+  //g->texrepeat[1] = 1;
+  g->emission = 0;
+  g->specular = 0.5;
+  g->shininess = 0.5;
+  g->reflectance = 0;
+  g->label[0] = 0;
+
+  // size
+  g->size[0] = 0.02f / scn->scale;
+  g->size[1] = 0.03f / scn->scale;
+  g->size[2] = 0.04f / scn->scale;
+
+  // color
+  _mju_copy4_f(g->rgba, ctl.rgba);
+
+  // save
+  ctl.g = g;
+
+  // counter
+  scn->ngeom++;
+
+  // Add Line
+  g++;
+  // default geom
+  g->type = mjGEOM_LINE;
+  g->dataid = -1;
+  g->objtype = mjOBJ_UNKNOWN;
+  g->objid = -1;
+  g->category = mjCAT_DECOR;
+  g->emission = 0;
+  g->specular = 0.5;
+  g->shininess = 0.5;
+  g->reflectance = 0;
+  g->label[0] = 0;
+
+  // size
+  g->size[0] = 3;  // linewidth
+  g->size[1] = 0;  // nothing?
+  g->size[2] = -10 / scn->scale;  // line length
+
+  // color
+  _mju_copy4_f(g->rgba, ctl.rgba);
+
+  // save
+  ctl.g2 = g;
+
+  // counter
+  scn->ngeom++;
+
+  // Update all geoms pose
+  this->_update_controller_pose(scn, ctl);
+}
+
+void SimulateXr::_update_controller_pose(mjvScene *scn,
+                                         SimulateXrController &ctl) {
+  // data is in ctl.pos[3] and ctl.quat[4]
+  // needs to be transformed in accordance with the scene
+  mjtNum mjpos[3], mjquat[4];
+  mjv_room2model(mjpos, mjquat, ctl.pos, ctl.quat, scn);
+
+  // position
+  mju_n2f(ctl.g->pos, mjpos, 3);
+
+  // orientation
+  mjtNum mat[9];
+  mju_quat2Mat(mat, mjquat);
+  mju_n2f(ctl.g->mat, mat, 9);
+
+  // the ray seems to be aligned naturally with index finger of HAND 
+  // the actual controller is perpendicular to the direction (up)
+  // TODO set up direction based on the type of controller.
+  const mjtNum axis[4] = {0, 0, 0.7071068, 0.7071068};
+  mju_mulQuat(mjquat, ctl.quat, axis);
+  mjv_room2model(mjpos, mjquat, ctl.pos, mjquat, scn);
+
+  mju_n2f(ctl.g2->pos, mjpos, 3);
+
+  mju_quat2Mat(mat, mjquat);
+  mju_n2f(ctl.g2->mat, mat, 9);
+
+  // save the ray direction
+  const mjtNum axis_zero[3] = {0, 0, -1};
+  mju_rotVecQuat(ctl.ray, axis_zero, mjquat);
+  mju_copy3(ctl.ray_pos, mjpos);
+}
+
+void SimulateXr::_perform_controller_action(mjModel *m, mjData *d,
+                                            const mjvOption *vopt,
+                                            SimulateXrController &ctl) {
+  // if the controller is grabbing, record it target body and its relative position
+  if (ctl.grab) {
+    // if no object was selected before, find it and record relative position
+    if (ctl.target_body < 0) {
+      int geomid[1] = {-1};
+
+      mjtNum geomdist = mj_ray(m, d, ctl.ray_pos, ctl.ray, vopt->geomgroup,
+                               vopt->flags[mjVIS_STATIC], -1, geomid);
+
+      // TODO add skins and flexes? see mjv_select source
+
+      if (geomdist < 0) {
+        return;
+      }
+      // printf("Touching geomid %d.\n", *geomid);
+
+      // get the body
+      ctl.target_body = m->geom_bodyid[*geomid];
+
+      // save the relative pose
+      mjtNum negp[3], negq[4], xiquat[4];
+      mju_mulQuat(xiquat, d->xquat + 4 * ctl.target_body,
+                  m->body_iquat + 4 * ctl.target_body);
+      mju_negPose(negp, negq, ctl.pos, ctl.quat);
+      mju_mulPose(ctl.target_rel_pos, ctl.target_rel_quat, negp, negq,
+                  d->xipos + 3 * ctl.target_body, xiquat);
+
+      //printf_s("target_rel_pos %.2f, %.2f, %.2f\n", ctl.target_rel_pos[0],
+      //         ctl.target_rel_pos[1], ctl.target_rel_pos[2]);
+
+      // color controller
+      _mju_copy4_f(ctl.g->rgba, ctl.rgba_select);
+    } else {
+      // calculate the resultant target pose depending on controller pose
+      mju_mulPose(ctl.target_pos, ctl.target_quat, ctl.pos, ctl.quat,
+                  ctl.target_rel_pos, ctl.target_rel_quat);
+
+      // color controller
+      _mju_copy4_f(ctl.g->rgba, ctl.rgba_select);
+    }
+  } else {
+    // deselect
+    ctl.target_body = -1;
+    _mju_copy4_f(ctl.g->rgba, ctl.rgba);
+  }
+}
+
+void SimulateXr::_enact_controller_effects(mjModel *m, mjData *d,
+                                           mjvPerturb &pert,
+                                           SimulateXrController &ctl) {
+  if (ctl.grab && ctl.target_body > 0) {
+    // perpare mjvPerturb object
+    int active_flag = 0;
+    switch (simxr_control_state.grab_state) {
+      case SIMXR_CONTROLLER_GRAB_ACTIONS::TRANSLATE:
+        active_flag = mjPERT_TRANSLATE;
+        break;
+      case SIMXR_CONTROLLER_GRAB_ACTIONS::ROTATE:
+        active_flag = mjPERT_ROTATE;
+        break;
+      case SIMXR_CONTROLLER_GRAB_ACTIONS::BOTH:
+        active_flag = mjPERT_TRANSLATE | mjPERT_ROTATE;
+        break;
+      default:
+        mju_error("Wrong simxr controller grab action detected.");
+        break;
+    }
+
+    // TODO currently mujoco does not implement active2 correctly
+    if (pert.active)  // if adding a second perturbation
+      pert.active2 = active_flag;
+    else
+      pert.active = active_flag;
+
+    pert.select = ctl.target_body;
+    mju_copy3(pert.refpos, ctl.target_pos);
+    mju_copy(pert.refquat, ctl.target_quat, 4);
+
+    mju_copy3(pert.refselpos, ctl.target_pos);
+
+    // apply
+    //mjv_applyPerturbPose(m, d, &pert, 0);  // TODO reenable - for paused after testing
+    mjv_applyPerturbForce(m, d, &pert);
+  }
 }

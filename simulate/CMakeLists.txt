@@ -53,7 +53,7 @@ endif()
 
 option(SIMULATE_BUILD_EXECUTABLE "Build the simulate executable binary." ON)
 option(SIMULATE_GLFW_DYNAMIC_SYMBOLS "Whether to resolve GLFW symbols dynamically." OFF)
-option(SIMULATE_BUILD_XR "Build XR-enabled simulate executable binary." OFF)
+option(SIMULATE_BUILD_XR "Build XR-enabled simulate executable binary." ON)
 
 # Check if we are building as standalone project.
 set(SIMULATE_STANDALONE OFF)
@@ -164,8 +164,11 @@ target_link_options(libsimulate PRIVATE ${MUJOCO_SIMULATE_LINK_OPTIONS})
 
 if(SIMULATE_BUILD_XR)
   set(SIMULATE_OPENXR_HEADERS
+      simulate_xr/simulate_xr_imports.h
+      simulate_xr/simulate_xr_controllers.h
       simulate_xr/simulate_xr.h)
   set(SIMULATE_OPENXR_SOURCES
+      simulate_xr/simulate_xr_controllers.cc
       simulate_xr/simulate_xr.cc)
   set(SIMULATE_OPENXR_GLAD
       simulate_xr/glad/glad.h simulate_xr/glad/glad.c)

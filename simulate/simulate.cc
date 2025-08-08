@@ -2342,8 +2342,11 @@ void Simulate::LoadOnRenderThread() {
   }
 
 #ifdef mjBUILDSIMULATEXR
-  if (this->simXr.is_initialized())
+  if (this->simXr.is_initialized()) {
     this->simXr.set_scn_params(&this->scn);
+    // add controller objects and rays
+    this->simXr.add_controller_geoms(&this->scn);
+  }
 #endif // mjBUILDSIMULATEXR
 
   // set window title to model name
@@ -2537,8 +2540,12 @@ void Simulate::Render() {
     // render in offscreen buffer
     mjr_setBuffer(mjFB_OFFSCREEN, &this->platform_ui->mjr_context());
     mjr_render(rectXR, &this->scn, &this->platform_ui->mjr_context());
-    this->simXr.after_render(&this->platform_ui->mjr_context());
+    this->simXr.after_render(&this->platform_ui->mjr_context(),
+                       this->uistate.rect[0].width,  // entire window
+                       this->uistate.rect[0].height);
     mjr_setBuffer(mjFB_WINDOW, &this->platform_ui->mjr_context());
+
+    this->simXr.perform_controller_actions(this->m_, this->d_, &this->opt);
   } else {
     mjr_render(rect, &this->scn, &this->platform_ui->mjr_context());
   }
@@ -2906,6 +2913,14 @@ void Simulate::InjectNoise() {
       d_->ctrl[i] = mju_clip(d_->ctrl[i], bottom, top);
     }
   }
+}
+
+void Simulate::simxr_controller_effects() {
+#ifdef mjBUILDSIMULATEXR
+  if (this->simXr.is_initialized()) {
+    this->simXr.enact_controller_effects(this->m_, this->d_, this->pert);
+  }
+#endif  // mjBUILDSIMULATEXR
 }
 
 void Simulate::UpdateHField(int hfieldid) {

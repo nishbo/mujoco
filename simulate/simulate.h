@@ -269,6 +269,7 @@ class Simulate {
 #ifdef mjBUILDSIMULATEXR
   SimulateXr simXr;
 #endif // mjBUILDSIMULATEXR
+  void simxr_controller_effects();
 
   // additional user-defined visualization
   mjvScene* user_scn = nullptr;
