@@ -2918,7 +2918,7 @@ void Simulate::InjectNoise() {
 void Simulate::simxr_controller_effects() {
 #ifdef mjBUILDSIMULATEXR
   if (this->simXr.is_initialized()) {
-    this->simXr.enact_controller_effects(this->m_, this->d_, this->pert);
+    this->simXr.enact_controller_effects(this->m_, this->d_, &this->scn, this->pert);
   }
 #endif  // mjBUILDSIMULATEXR
 }

@@ -306,13 +306,13 @@ void SimulateXr::perform_controller_actions(mjModel *m, mjData *d,
   }
 }
 
-void SimulateXr::enact_controller_effects(mjModel *m, mjData *d,
+void SimulateXr::enact_controller_effects(mjModel *m, mjData *d, mjvScene *scn, 
                                           mjvPerturb &pert) {
   if (this->is_controllers_initialized()) {
     mju_zero(d->xfrc_applied, 6 * m->nbody);
     for (int i_controller = 0; i_controller < 2; i_controller++) {
       if (simxr_controllers[i_controller].is_active)
-        this->_enact_controller_effects(m, d, pert, simxr_controllers[i_controller]);
+        this->_enact_controller_effects(m, d, scn, pert, simxr_controllers[i_controller]);
     }
   }
 }
@@ -1238,13 +1238,42 @@ void SimulateXr::_perform_controller_action(mjModel *m, mjData *d,
 
       // color controller
       _mju_copy4_f(ctl.g->rgba, ctl.rgba_select);
+
+      // save starting pos and orientation
+      mju_copy3(ctl.pos0, ctl.pos);
+      mju_copy4(ctl.quat0, ctl.quat);
+      mju_copy3(ctl.target_pos0, d->xpos + 3 * ctl.target_body);
+      mju_copy4(ctl.target_quat0, d->xquat + 4 * ctl.target_body);
     } else {
       // calculate the resultant target pose depending on controller pose
       mju_mulPose(ctl.target_pos, ctl.target_quat, ctl.pos, ctl.quat,
                   ctl.target_rel_pos, ctl.target_rel_quat);
 
+      // try
+      // dA = qA * conj(qA0)   (TRUE conjugate: {w,-x,-y,-z})
+      mjtNum qA0_conj[4] = {ctl.quat0[0], -ctl.quat0[1], -ctl.quat0[2],
+                            -ctl.quat0[3]};
+      mjtNum dA[4];  // delta rotation in world frame
+      mju_mulQuat(dA, ctl.quat, qA0_conj);
+
+      // qB* = dA * qB0         (apply the same world delta to B's baseline)
+      mjtNum qBstar[4];
+      mju_mulQuat(qBstar, dA, ctl.target_quat0);
+
+      // normalize for safety
+      mju_normalize4(qBstar);
+
+      // write target orientation into the perturb reference
+      mju_copy4(ctl.target_quat, qBstar);
+
       // color controller
       _mju_copy4_f(ctl.g->rgba, ctl.rgba_select);
+
+      printf_s("%f %f %f %f ... %f %f %f %f ... %f %f %f %f\n",
+               ctl.target_quat0[0], ctl.target_quat0[1], ctl.target_quat0[2],
+               ctl.target_quat0[3], qBstar[0], qBstar[1], qBstar[2],
+               qBstar[3], dA[0], dA[1], dA[2],
+               dA[3]);
     }
   } else {
     // deselect
@@ -1253,7 +1282,7 @@ void SimulateXr::_perform_controller_action(mjModel *m, mjData *d,
   }
 }
 
-void SimulateXr::_enact_controller_effects(mjModel *m, mjData *d,
+void SimulateXr::_enact_controller_effects(mjModel *m, mjData *d, mjvScene *scn, 
                                            mjvPerturb &pert,
                                            SimulateXrController &ctl) {
   if (ctl.grab && ctl.target_body > 0) {
@@ -1274,13 +1303,13 @@ void SimulateXr::_enact_controller_effects(mjModel *m, mjData *d,
         break;
     }
 
-    // TODO currently mujoco does not implement active2 correctly
-    if (pert.active)  // if adding a second perturbation
-      pert.active2 = active_flag;
-    else
-      pert.active = active_flag;
+    
+    pert.active = active_flag;
 
     pert.select = ctl.target_body;
+    mjv_initPerturb(m, d, scn, &pert);
+    pert.scale = 1;
+
     mju_copy3(pert.refpos, ctl.target_pos);
     mju_copy(pert.refquat, ctl.target_quat, 4);
 

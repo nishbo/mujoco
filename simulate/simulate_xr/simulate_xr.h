@@ -28,6 +28,9 @@ struct SimulateXrController_ {
   mjtNum pos[3] = {0};
   mjtNum quat[4] = {0};
 
+  mjtNum pos0[3] = {0};
+  mjtNum quat0[3] = {0};
+
   bool grab = false;
 
   // set in SimulateXr::init()
@@ -45,6 +48,9 @@ struct SimulateXrController_ {
   mjtNum target_rel_quat[4] = {0};
   mjtNum target_pos[3] = {0};
   mjtNum target_quat[4] = {0};
+
+  mjtNum target_pos0[3] = {0};
+  mjtNum target_quat0[4] = {0};
 };
 typedef struct SimulateXrController_ SimulateXrController;
 
@@ -94,7 +100,8 @@ class SimulateXr {
   void perform_controller_actions(mjModel *m, mjData *d, const mjvOption *vopt);
 
   // within physical sim
-  void enact_controller_effects(mjModel *m, mjData *d, mjvPerturb &pert);
+  void enact_controller_effects(mjModel *m, mjData *d, mjvScene *scn,
+                                mjvPerturb &pert);
 
  private:
   bool m_initialized = false;
@@ -247,7 +254,7 @@ class SimulateXr {
   void _perform_controller_action(mjModel *m, mjData *d, const mjvOption *vopt,
                                   SimulateXrController &ctl);
 
-  void _enact_controller_effects(mjModel *m, mjData *d, mjvPerturb &pert,
+  void _enact_controller_effects(mjModel *m, mjData *d, mjvScene* scn, mjvPerturb &pert,
                                  SimulateXrController &ctl);
 };
 
