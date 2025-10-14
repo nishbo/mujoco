@@ -29,7 +29,7 @@ struct SimulateXrController_ {
   mjtNum quat[4] = {0};
 
   mjtNum pos0[3] = {0};
-  mjtNum quat0[3] = {0};
+  mjtNum quat0[4] = {0};
 
   bool grab = false;
 
@@ -254,7 +254,8 @@ class SimulateXr {
   void _perform_controller_action(mjModel *m, mjData *d, const mjvOption *vopt,
                                   SimulateXrController &ctl);
 
-  void _enact_controller_effects(mjModel *m, mjData *d, mjvScene* scn, mjvPerturb &pert,
+  void _enact_controller_effects(mjModel *m, mjData *d, mjvScene *scn,
+                                 mjvPerturb &pert,
                                  SimulateXrController &ctl);
 };
 

@@ -1225,13 +1225,13 @@ void SimulateXr::_perform_controller_action(mjModel *m, mjData *d,
       // get the body
       ctl.target_body = m->geom_bodyid[*geomid];
 
-      // save the relative pose
-      mjtNum negp[3], negq[4], xiquat[4];
-      mju_mulQuat(xiquat, d->xquat + 4 * ctl.target_body,
-                  m->body_iquat + 4 * ctl.target_body);
-      mju_negPose(negp, negq, ctl.pos, ctl.quat);
-      mju_mulPose(ctl.target_rel_pos, ctl.target_rel_quat, negp, negq,
-                  d->xipos + 3 * ctl.target_body, xiquat);
+      //// save the relative pose
+      //mjtNum negp[3], negq[4], xiquat[4];
+      //mju_mulQuat(xiquat, d->xquat + 4 * ctl.target_body,
+      //            m->body_iquat + 4 * ctl.target_body);
+      //mju_negPose(negp, negq, ctl.pos, ctl.quat);
+      //mju_mulPose(ctl.target_rel_pos, ctl.target_rel_quat, negp, negq,
+      //            d->xipos + 3 * ctl.target_body, xiquat);
 
       //printf_s("target_rel_pos %.2f, %.2f, %.2f\n", ctl.target_rel_pos[0],
       //         ctl.target_rel_pos[1], ctl.target_rel_pos[2]);
@@ -1245,35 +1245,51 @@ void SimulateXr::_perform_controller_action(mjModel *m, mjData *d,
       mju_copy3(ctl.target_pos0, d->xpos + 3 * ctl.target_body);
       mju_copy4(ctl.target_quat0, d->xquat + 4 * ctl.target_body);
     } else {
-      // calculate the resultant target pose depending on controller pose
-      mju_mulPose(ctl.target_pos, ctl.target_quat, ctl.pos, ctl.quat,
-                  ctl.target_rel_pos, ctl.target_rel_quat);
+      //// calculate the resultant target pose depending on controller pose
+      //mju_mulPose(ctl.target_pos, ctl.target_quat, ctl.pos, ctl.quat,
+      //            ctl.target_rel_pos, ctl.target_rel_quat);
 
       // try
-      // dA = qA * conj(qA0)   (TRUE conjugate: {w,-x,-y,-z})
+      // dA = qA * conj(qA0)   (conjugate: {w,-x,-y,-z})
       mjtNum qA0_conj[4] = {ctl.quat0[0], -ctl.quat0[1], -ctl.quat0[2],
                             -ctl.quat0[3]};
       mjtNum dA[4];  // delta rotation in world frame
       mju_mulQuat(dA, ctl.quat, qA0_conj);
 
       // qB* = dA * qB0         (apply the same world delta to B's baseline)
-      mjtNum qBstar[4];
-      mju_mulQuat(qBstar, dA, ctl.target_quat0);
+      mju_mulQuat(ctl.target_quat, dA, ctl.target_quat0);
+      mju_normalize4(ctl.target_quat);
 
-      // normalize for safety
-      mju_normalize4(qBstar);
+      //{  // did not help
+      //  // compute xiquat
+      //  mjtNum xiquat[4];
+      //  mju_mulQuat(xiquat, d->xquat + 4 * ctl.target_body,
+      //              m->body_iquat + 4 * ctl.target_body);
+      //  // q2 = neg(selbody) * refquat
+      //  mjtNum q2[4];
+      //  mju_negQuat(dA, xiquat);
+      //  mju_mulQuat(q2, dA, ctl.target_quat);
 
-      // write target orientation into the perturb reference
-      mju_copy4(ctl.target_quat, qBstar);
+      //  // convert q2 to axis-angle
+      //  mjtNum dif[3];
+      //  mju_quat2Vel(dif, q2, 1);
+      //  mjtNum scl = mju_normalize3(dif);
+
+      //  // check limit: +/- 90 deg allowed
+      //  if (scl < -mjPI * 0.5 || scl > mjPI * 0.5) {
+      //    // clamp angle
+      //    scl = mju_max(-mjPI * 0.5, mju_min(mjPI * 0.5, scl));
+
+      //    // reconstruct q2
+      //    mju_axisAngle2Quat(q2, dif, scl);
+
+      //    // set refquat = selbody * q2_new
+      //    mju_mulQuat(ctl.target_quat, xiquat, q2);
+      //  }
+      //}
 
       // color controller
       _mju_copy4_f(ctl.g->rgba, ctl.rgba_select);
-
-      printf_s("%f %f %f %f ... %f %f %f %f ... %f %f %f %f\n",
-               ctl.target_quat0[0], ctl.target_quat0[1], ctl.target_quat0[2],
-               ctl.target_quat0[3], qBstar[0], qBstar[1], qBstar[2],
-               qBstar[3], dA[0], dA[1], dA[2],
-               dA[3]);
     }
   } else {
     // deselect
@@ -1302,21 +1318,25 @@ void SimulateXr::_enact_controller_effects(mjModel *m, mjData *d, mjvScene *scn,
         mju_error("Wrong simxr controller grab action detected.");
         break;
     }
+    pert.select = 0;
+    pert.flexselect = -1;
+    pert.skinselect = -1;
 
-    
     pert.active = active_flag;
-
     pert.select = ctl.target_body;
     mjv_initPerturb(m, d, scn, &pert);
-    pert.scale = 1;
+
+    // Use COM in body-local as the selection point
+    mju_copy3(pert.localpos, m->body_ipos + 3 * ctl.target_body);
 
     mju_copy3(pert.refpos, ctl.target_pos);
-    mju_copy(pert.refquat, ctl.target_quat, 4);
+    mju_copy4(pert.refquat, ctl.target_quat);
 
     mju_copy3(pert.refselpos, ctl.target_pos);
 
     // apply
     //mjv_applyPerturbPose(m, d, &pert, 0);  // TODO reenable - for paused after testing
     mjv_applyPerturbForce(m, d, &pert);
+
   }
 }

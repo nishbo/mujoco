@@ -2103,6 +2103,8 @@ void Simulate::Sync() {
     pending_.select = false;
   }
 
+  this->simxr_controller_effects();
+
   // update scene or sync data from user in passive mode
   if (!is_passive_) {
     mjv_updateScene(m_, d_, &this->opt, &this->pert, &this->cam, mjCAT_ALL, &this->scn);
@@ -2155,14 +2157,14 @@ void Simulate::Sync() {
   // clear timers once profiler info has been copied
   ClearTimers(d_);
 
-  if (this->run || this->is_passive_) {
-    // clear old perturbations, apply new
-    mju_zero(d_->xfrc_applied, 6*m_->nbody);
-    mjv_applyPerturbPose(m_, d_, &this->pert, 0);  // mocap bodies only
-    mjv_applyPerturbForce(m_, d_, &this->pert);
-  } else {
-    mjv_applyPerturbPose(m_, d_, &this->pert, 1);  // mocap and dynamic bodies
-  }
+  //if (this->run || this->is_passive_) {
+  //  // clear old perturbations, apply new
+  //  mju_zero(d_->xfrc_applied, 6*m_->nbody);
+  //  mjv_applyPerturbPose(m_, d_, &this->pert, 0);  // mocap bodies only
+  //  mjv_applyPerturbForce(m_, d_, &this->pert);
+  //} else {
+  //  mjv_applyPerturbPose(m_, d_, &this->pert, 1);  // mocap and dynamic bodies
+  //}
 }
 
 //------------------------- Tell the render thread to load a file and wait -------------------------

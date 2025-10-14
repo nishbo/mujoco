@@ -394,7 +394,7 @@ void PhysicsLoop(mj::Simulate& sim) {
               }
 
               // xr controller effects
-              sim.simxr_controller_effects();
+              //sim.simxr_controller_effects();
 
               // inject noise
               sim.InjectNoise();
