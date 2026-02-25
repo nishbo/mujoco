@@ -1254,7 +1254,40 @@ void SimulateXr::_perform_controller_action(mjModel *m, mjData *d,
       mjtNum qA0_conj[4] = {ctl.quat0[0], -ctl.quat0[1], -ctl.quat0[2],
                             -ctl.quat0[3]};
       mjtNum dA[4];  // delta rotation in world frame
-      mju_mulQuat(dA, ctl.quat, qA0_conj);
+      mju_mulQuat(dA, ctl.quat, qA0_conj);  
+      
+      // HACK DIRTY HACK  - reflect one of the rotations
+      mjtNum r[3];
+      mju_quat2Vel(r, dA, 1.0);
+
+      // Flip one component
+      r[2] = -r[2];
+
+      // Rebuild quaternion from rotation vector
+      mjtNum ang = mju_norm3(r);
+      if (ang < 1e-12) {
+        dA[0] = 1;
+        dA[1] = dA[2] = dA[3] = 0;
+      } else {
+        mjtNum ax[3] = {r[0] / ang, r[1] / ang, r[2] / ang};
+        mju_axisAngle2Quat(dA, ax, ang);
+      }
+
+      // HACK DIRTY HACK hardcoding 90 deg rotations
+      const mjtNum s = 0.70710678;
+      // 0:+X, 1:-X, 2:+Y, 3:-Y, 4:+Z, 5:-Z
+      const mjtNum q90[6][4] = {
+          {s, s, 0, 0},   // +90 X
+          {s, -s, 0, 0},  // -90 X
+          {s, 0, s, 0},   // +90 Y
+          {s, 0, -s, 0},  // -90 Y
+          {s, 0, 0, s},   // +90 Z
+          {s, 0, 0, -s}   // -90 Z
+      };
+      mju_mulQuat(dA, q90[1], dA); 
+
+      mju_normalize4(dA);
+      // end dirty hacks
 
       // qB* = dA * qB0         (apply the same world delta to B's baseline)
       mju_mulQuat(ctl.target_quat, dA, ctl.target_quat0);
