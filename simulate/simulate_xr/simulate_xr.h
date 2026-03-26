@@ -51,6 +51,9 @@ struct SimulateXrController_ {
 
   mjtNum target_pos0[3] = {0};
   mjtNum target_quat0[4] = {0};
+  
+  mjtNum localpos[3] = {0};
+  mjtNum refselpos[3] = {0};
 };
 typedef struct SimulateXrController_ SimulateXrController;
 
