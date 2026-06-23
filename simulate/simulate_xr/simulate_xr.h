@@ -100,7 +100,8 @@ class SimulateXr {
   void add_controller_geoms(mjvScene *scn);
 
   // within rendering
-  void perform_controller_actions(mjModel *m, mjData *d, const mjvOption *vopt);
+  void perform_controller_actions(mjModel *m, mjData *d, const mjvOption *vopt,
+                                  mjvScene *scn);
 
   // within physical sim
   void enact_controller_effects(mjModel *m, mjData *d, mjvScene *scn,
@@ -255,7 +256,7 @@ class SimulateXr {
   void _update_controller_pose(mjvScene *scn, SimulateXrController &ctl);
 
   void _perform_controller_action(mjModel *m, mjData *d, const mjvOption *vopt,
-                                  SimulateXrController &ctl);
+                                  mjvScene *scn, SimulateXrController &ctl);
 
   void _enact_controller_effects(mjModel *m, mjData *d, mjvScene *scn,
                                  mjvPerturb &pert,

@@ -2547,7 +2547,8 @@ void Simulate::Render() {
                        this->uistate.rect[0].height);
     mjr_setBuffer(mjFB_WINDOW, &this->platform_ui->mjr_context());
 
-    this->simXr.perform_controller_actions(this->m_, this->d_, &this->opt);
+    this->simXr.perform_controller_actions(this->m_, this->d_, &this->opt,
+                                           &this->scn);
   } else {
     mjr_render(rect, &this->scn, &this->platform_ui->mjr_context());
   }

@@ -296,11 +296,12 @@ void SimulateXr::add_controller_geoms(mjvScene *scn) {
 }
 
 void SimulateXr::perform_controller_actions(mjModel *m, mjData *d,
-                                            const mjvOption *vopt) {
+                                            const mjvOption *vopt,
+                                            mjvScene *scn) {
   if (this->is_controllers_initialized()) {
     for (int i_controller = 0; i_controller < 2; i_controller++) {
       if (simxr_controllers[i_controller].is_active)
-        this->_perform_controller_action(m, d, vopt,
+        this->_perform_controller_action(m, d, vopt, scn,
                                          simxr_controllers[i_controller]);
     }
   }
@@ -1204,14 +1205,30 @@ void SimulateXr::_update_controller_pose(mjvScene *scn,
 }
 
 void SimulateXr::_perform_controller_action(mjModel *m, mjData *d,
-                                            const mjvOption *vopt,
+                                            const mjvOption *vopt, mjvScene *scn,
                                             SimulateXrController &ctl) {
-  // if the controller is grabbing, record it target body and its relative position
+  // If the controller is grabbing, record its target body and track the body
+  // so that it follows the controller's change in position and/or orientation.
+  //
+  // All bookkeeping below is done in MODEL coordinates. The controller pose
+  // arrives in OpenXR "room" coordinates, so it is converted with
+  // mjv_room2model() - the same scene transform used to place the controller
+  // geoms and the selection ray. This is what makes the motion track correctly
+  // for every scene transform, and removes the need for the previous hardcoded
+  // 90-degree "fix-up" rotations.
+  //
+  // The references are stored in the body's INERTIAL frame (COM position
+  // d->xipos and orientation d->xquat * body_iquat), because that is exactly
+  // the frame driven by mjv_applyPerturbForce() in enact_controller_effects().
+  // The old code used the body frame (d->xquat) instead, which is offset by
+  // body_iquat. That offset is zero for many models but a 90-degree rotation
+  // for others, which is why some models flipped by 90 degrees on grab.
   if (ctl.grab) {
-    // if no object was selected before, find it and record relative position
+    // if no object was selected before, find it and record the reference state
     if (ctl.target_body < 0) {
       int geomid[1] = {-1};
 
+      // ray_pos and ray are already expressed in model coordinates
       mjtNum geomdist = mj_ray(m, d, ctl.ray_pos, ctl.ray, vopt->geomgroup,
                                vopt->flags[mjVIS_STATIC], -1, geomid);
 
@@ -1225,101 +1242,50 @@ void SimulateXr::_perform_controller_action(mjModel *m, mjData *d,
       // get the body
       ctl.target_body = m->geom_bodyid[*geomid];
 
-      //// save the relative pose
-      //mjtNum negp[3], negq[4], xiquat[4];
-      //mju_mulQuat(xiquat, d->xquat + 4 * ctl.target_body,
-      //            m->body_iquat + 4 * ctl.target_body);
-      //mju_negPose(negp, negq, ctl.pos, ctl.quat);
-      //mju_mulPose(ctl.target_rel_pos, ctl.target_rel_quat, negp, negq,
-      //            d->xipos + 3 * ctl.target_body, xiquat);
-
-      //printf_s("target_rel_pos %.2f, %.2f, %.2f\n", ctl.target_rel_pos[0],
-      //         ctl.target_rel_pos[1], ctl.target_rel_pos[2]);
-
       // color controller
       _mju_copy4_f(ctl.g->rgba, ctl.rgba_select);
 
-      // save starting pos and orientation
-      mju_copy3(ctl.pos0, ctl.pos);
-      mju_copy4(ctl.quat0, ctl.quat);
-      mju_copy3(ctl.target_pos0, d->xpos + 3 * ctl.target_body);
-      mju_copy4(ctl.target_quat0, d->xquat + 4 * ctl.target_body);
+      // reference controller pose at grab time, in model coordinates
+      mjv_room2model(ctl.pos0, ctl.quat0, ctl.pos, ctl.quat, scn);
+
+      // reference target pose at grab time, in the body's inertial frame
+      mju_copy3(ctl.target_pos0, d->xipos + 3 * ctl.target_body);
+      mju_mulQuat(ctl.target_quat0, d->xquat + 4 * ctl.target_body,
+                  m->body_iquat + 4 * ctl.target_body);
+
+      // start from a zero perturbation (target == current) on the grab frame
+      mju_copy3(ctl.localpos, m->body_ipos + 3 * ctl.target_body);
+      mju_copy3(ctl.refselpos, ctl.target_pos0);
+      mju_copy4(ctl.target_quat, ctl.target_quat0);
     } else {
-      //// calculate the resultant target pose depending on controller pose
-      //mju_mulPose(ctl.target_pos, ctl.target_quat, ctl.pos, ctl.quat,
-      //            ctl.target_rel_pos, ctl.target_rel_quat);
+      // current controller pose in model coordinates
+      mjtNum cpos[3], cquat[4];
+      mjv_room2model(cpos, cquat, ctl.pos, ctl.quat, scn);
 
       // ORIENTATION
-      // dA = qA * conj(qA0)   (conjugate: {w,-x,-y,-z})
-      mjtNum qA0_conj[4] = {ctl.quat0[0], -ctl.quat0[1], -ctl.quat0[2],
-                            -ctl.quat0[3]};
-      mjtNum dA[4];  // delta rotation in world frame
-      mju_mulQuat(dA, ctl.quat, qA0_conj);  
-      
-      // HACK DIRTY HACK  - reflect one of the rotations
-      mjtNum r[3];
-      mju_quat2Vel(r, dA, 1.0);
-
-      // Flip one component
-      r[2] = -r[2];
-
-      // Rebuild quaternion from rotation vector
-      mjtNum ang = mju_norm3(r);
-      if (ang < 1e-12) {
-        dA[0] = 1;
-        dA[1] = dA[2] = dA[3] = 0;
-      } else {
-        mjtNum ax[3] = {r[0] / ang, r[1] / ang, r[2] / ang};
-        mju_axisAngle2Quat(dA, ax, ang);
-      }
-
-      // HACK DIRTY HACK hardcoding 90 deg rotations
-      const mjtNum s = 0.70710678;
-      // 0:+X, 1:-X, 2:+Y, 3:-Y, 4:+Z, 5:-Z
-      const mjtNum q90[6][4] = {  // options
-          {s, s, 0, 0},   // +90 X
-          {s, -s, 0, 0},  // -90 X
-          {s, 0, s, 0},   // +90 Y
-          {s, 0, -s, 0},  // -90 Y
-          {s, 0, 0, s},   // +90 Z
-          {s, 0, 0, -s}   // -90 Z
-      };
-      mju_mulQuat(dA, q90[1], dA); 
-
+      // delta rotation of the controller since grab, in the model frame:
+      //   dA = cquat * conj(cquat0)
+      mjtNum quat0_conj[4];
+      mju_negQuat(quat0_conj, ctl.quat0);
+      mjtNum dA[4];
+      mju_mulQuat(dA, cquat, quat0_conj);
       mju_normalize4(dA);
-      // end dirty hacks
 
-      // qB* = dA * qB0
+      // apply the same world-frame rotation to the body's inertial frame:
+      //   target_quat = dA * target_quat0
       mju_mulQuat(ctl.target_quat, dA, ctl.target_quat0);
       mju_normalize4(ctl.target_quat);
-
       // end ORIENTATION
 
       // POSITION
+      // delta translation of the controller since grab, in the model frame
       mjtNum dp[3];
-      mju_sub3(dp, ctl.pos, ctl.pos0);
+      mju_sub3(dp, cpos, ctl.pos0);
 
-      const mjtNum *body_ipos = m->body_ipos + 3 * ctl.target_body;
-
-      mjtNum ipos_off[3], xipos0[3];
-      mju_rotVecQuat(ipos_off, body_ipos, ctl.target_quat0);
-      mju_add3(xipos0, ctl.target_pos0, ipos_off);
-
-      // some axes flipped
-      mju_rotVecQuat(dp, dp, q90[0]);
-      //mjtNum dp2[3] = {dp[2], dp[1], dp[0]};
-
-      // desired COM: xipos_des = xipos0 + dp
-      mjtNum xipos_des[3];
-      mju_add3(xipos_des, xipos0, dp);
-
-      // selection point in body coords (COM)
-      mju_copy3(ctl.localpos, body_ipos);  
-      // desired selection point in world
-      mju_copy3(ctl.refselpos, xipos_des);  
-
-      mju_add3(ctl.target_pos, ctl.target_pos0, dp);
-
+      // selection point is the body COM (inertial-frame origin)
+      mju_copy3(ctl.localpos, m->body_ipos + 3 * ctl.target_body);
+      // desired COM world position: follows the controller translation
+      mju_add3(ctl.refselpos, ctl.target_pos0, dp);
       // end POSITION
 
       // color controller
@@ -1358,9 +1324,12 @@ void SimulateXr::_enact_controller_effects(mjModel *m, mjData *d, mjvScene *scn,
 
     pert.active = active_flag;
     pert.select = ctl.target_body;
+
+    // selection point (body COM) must be set before mjv_initPerturb so the
+    // spatial-inertia scaling is evaluated at the point the force acts on
+    mju_copy3(pert.localpos, ctl.localpos);
     mjv_initPerturb(m, d, scn, &pert);
 
-    mju_copy3(pert.localpos, ctl.localpos);
     //mju_copy3(pert.refpos, ctl.target_pos);
     mju_copy3(pert.refselpos, ctl.refselpos);
 
